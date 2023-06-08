@@ -17,6 +17,7 @@ Tools supporting the execution of COLMAP and preparation of COLMAP-based dataset
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
@@ -32,8 +33,11 @@ from rich.progress import track
 from nerfstudio.data.utils.colmap_parsing_utils import (
     qvec2rotmat,
     read_cameras_binary,
+    read_cameras_text,
     read_images_binary,
+    read_images_text,
     read_points3D_binary,
+    read_points3D_text,
 )
 from nerfstudio.process_data.process_data_utils import CameraModel
 from nerfstudio.utils import colormaps
@@ -427,7 +431,7 @@ def colmap_to_json(
         c2w = c2w[np.array([1, 0, 2, 3]), :]
         c2w[2, :] *= -1
 
-        name = im_data.name
+        name = os.path.basename(im_data.name)
         if image_rename_map is not None:
             name = image_rename_map[name]
         name = Path(f"./images/{name}")
@@ -580,7 +584,9 @@ def create_sfm_depth(
         # is 1000, then `depth_img` will be integer millimeters.
         depth_img = (depth_scale_to_integer_factor * depth).astype(np.uint16)
 
-        out_name = str(im_data.name)
+        out_name = str(os.path.basename(im_data.name))
+        pre, ext = os.path.splitext(out_name)
+        out_name = pre + ".png"
         depth_path = output_dir / out_name
         cv2.imwrite(str(depth_path), depth_img)  # type: ignore
 

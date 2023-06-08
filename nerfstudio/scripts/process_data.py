@@ -187,7 +187,7 @@ class ProcessPolycam(BaseConverterToNerfstudioDataset):
         polycam_depth_filenames = []
         if self.use_depth:
             polycam_depth_image_dir = self.data / "keyframes" / "depth"
-            depth_dir = self.output_dir / "depth"
+            depth_dir = self.output_dir / "depths"
             depth_dir.mkdir(parents=True, exist_ok=True)
             (depth_processing_log, polycam_depth_filenames) = polycam_utils.process_depth_maps(
                 polycam_depth_image_dir,

@@ -150,7 +150,7 @@ class ColmapConverterToNerfstudioDataset(BaseConverterToNerfstudioDataset):
         """
         summary_log = []
         if self.use_sfm_depth:
-            depth_dir = self.output_dir / "depth"
+            depth_dir = self.output_dir / "depths"
             depth_dir.mkdir(parents=True, exist_ok=True)
             image_id_to_depth_path = colmap_utils.create_sfm_depth(
                 recon_dir=self.output_dir / self.default_colmap_path(),

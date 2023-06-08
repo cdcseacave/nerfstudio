@@ -15,6 +15,7 @@
 """Helper utils for processing data into the nerfstudio format."""
 
 import math
+import re
 import os
 import shutil
 import sys
@@ -55,7 +56,7 @@ def list_images(data: Path) -> List[Path]:
         Paths to images contained in the directory
     """
     allowed_exts = [".jpg", ".jpeg", ".png", ".tif", ".tiff"]
-    image_paths = sorted([p for p in data.glob("[!.]*") if p.suffix.lower() in allowed_exts])
+    image_paths = sorted([p for p in data.glob("[!.]*") if p.suffix.lower() in allowed_exts and not re.search(".Clean", p.stem)])
     return image_paths
 
 
