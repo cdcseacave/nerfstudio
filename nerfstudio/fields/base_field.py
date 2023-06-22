@@ -129,7 +129,7 @@ class Field(nn.Module):
         if compute_normals:
             with torch.enable_grad():
                 normals = self.get_normals()
-            field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
+            field_outputs[FieldHeadNames.NORMAL] = normals  # type: ignore
         return field_outputs
 
 

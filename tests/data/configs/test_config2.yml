@@ -143,7 +143,7 @@ pipeline: !!python/object:nerfstudio.pipelines.base_pipeline.VanillaPipelineConf
     - 96
     orientation_loss_mult: 0.0001
     pred_normal_loss_mult: 0.001
-    predict_normals: false
+    estimate_normals: false
     proposal_initial_sampler: piecewise
     proposal_net_args_list:
     - hidden_dim: 16

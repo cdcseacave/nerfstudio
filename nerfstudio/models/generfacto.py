@@ -396,7 +396,7 @@ class GenerfactoModel(Model):
         for i in range(self.config.num_proposal_iterations):
             outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
 
-        normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
+        normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMAL], weights=weights)
 
         # lambertian shading
         if self.config.random_light_source:  # and self.training:
@@ -436,7 +436,7 @@ class GenerfactoModel(Model):
             outputs["train_output"] = accum_mask * rgb + background
 
         outputs["rendered_orientation_loss"] = orientation_loss(
-            weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
+            weights.detach(), field_outputs[FieldHeadNames.NORMAL], ray_bundle.directions
         )
 
         assert weights.shape[-1] == 1
