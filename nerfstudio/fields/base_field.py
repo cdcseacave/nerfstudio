@@ -77,7 +77,7 @@ class Field(nn.Module):
             ray_samples: Samples locations to compute density.
         """
 
-    def get_normals(self) -> Float[Tensor, "*batch 3"]:
+    def get_normals(self) -> Tuple[Float[Tensor, "*batch 3"], Float[Tensor, "*batch 3"]]:
         """Computes and returns a tensor of normals.
 
         Args:
@@ -89,16 +89,16 @@ class Field(nn.Module):
             self._sample_locations.shape[:-1] == self._density_before_activation.shape[:-1]
         ), "Sample locations and density must have the same shape besides the last dimension."
 
-        normals = torch.autograd.grad(
+        gradients = torch.autograd.grad(
             self._density_before_activation,
             self._sample_locations,
             grad_outputs=torch.ones_like(self._density_before_activation),
             retain_graph=True,
         )[0]
 
-        normals = -torch.nn.functional.normalize(normals, dim=-1)
+        normals = -torch.nn.functional.normalize(gradients, dim=-1)
 
-        return normals
+        return normals, gradients
 
     @abstractmethod
     def get_outputs(
@@ -111,7 +111,7 @@ class Field(nn.Module):
             density_embedding: Density embeddings to condition on.
         """
 
-    def forward(self, ray_samples: RaySamples, compute_normals: bool = False) -> Dict[FieldHeadNames, Tensor]:
+    def forward(self, ray_samples: RaySamples, compute_normals: bool = False, compute_gradients: bool = False) -> Dict[FieldHeadNames, Tensor]:
         """Evaluates the field at points along the ray.
 
         Args:
@@ -126,10 +126,13 @@ class Field(nn.Module):
         field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
         field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
 
-        if compute_normals:
+        if compute_normals or compute_gradients:
             with torch.enable_grad():
-                normals = self.get_normals()
-            field_outputs[FieldHeadNames.NORMAL] = normals  # type: ignore
+                normals, gradients = self.get_normals()
+            if compute_normals:
+                field_outputs[FieldHeadNames.NORMAL] = normals  # type: ignore
+            if compute_gradients:
+                field_outputs[FieldHeadNames.GRADIENT] = gradients  # type: ignore
         return field_outputs
 
 

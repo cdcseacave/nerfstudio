@@ -103,8 +103,6 @@ class NerfactoModelConfig(ModelConfig):
     """Distortion loss multiplier."""
     orientation_loss_mult: float = 0.0001
     """Orientation loss multiplier on computed normals."""
-    pred_normal_loss_mult: float = 0.001
-    """Predicted normal loss multiplier."""
     use_proposal_weight_anneal: bool = True
     """Whether to use proposal weight annealing."""
     use_average_appearance_embedding: bool = True
@@ -125,6 +123,10 @@ class NerfactoModelConfig(ModelConfig):
     """Which implementation to use for the model."""
     appearance_embed_dim: int = 32
     """Dimension of the appearance embedding."""
+    use_eikonal_loss: bool = False
+    """Whether to disable eikonal loss; seems to help but it does not makes much sens for density field."""
+    eikonal_loss_mult: float = 0.01
+    """Monocular normal consistency loss multiplier."""
 
 
 class NerfactoModel(Model):
@@ -273,7 +275,7 @@ class NerfactoModel(Model):
     def get_outputs(self, ray_bundle: RayBundle):
         ray_samples: RaySamples
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals)
+        field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals, compute_gradients=self.config.use_eikonal_loss)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
 
@@ -292,23 +294,19 @@ class NerfactoModel(Model):
         }
 
         if self.config.estimate_normals:
-            normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMAL], weights=weights)
-            outputs["normals"] = self.normals_shader(normals)
+            outputs["normals"] = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMAL], weights=weights)
         # These use a lot of GPU memory, so we avoid storing them for eval.
         if self.training:
             outputs["weights_list"] = weights_list
             outputs["ray_samples_list"] = ray_samples_list
 
-        if self.training and self.config.estimate_normals:
-            outputs["rendered_orientation_loss"] = orientation_loss(
-                weights.detach(), field_outputs[FieldHeadNames.NORMAL], ray_bundle.directions
-            )
+            if self.config.estimate_normals:
+                outputs["rendered_orientation_loss"] = orientation_loss(
+                    weights.detach(), field_outputs[FieldHeadNames.NORMAL], ray_bundle.directions
+                )
 
-            # outputs["rendered_pred_normal_loss"] = pred_normal_loss(
-            #     weights.detach(),
-            #     field_outputs[FieldHeadNames.NORMAL].detach(),
-            #     field_outputs[FieldHeadNames.PRED_NORMALS],
-            # )
+            if self.config.use_eikonal_loss:
+                outputs["eik_grad"] = field_outputs[FieldHeadNames.GRADIENT]
 
         for i in range(self.config.num_proposal_iterations):
             outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
@@ -338,11 +336,10 @@ class NerfactoModel(Model):
                 loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(
                     outputs["rendered_orientation_loss"]
                 )
-
-                # # ground truth supervision for normals
-                # loss_dict["pred_normal_loss"] = self.config.pred_normal_loss_mult * torch.mean(
-                #     outputs["rendered_pred_normal_loss"]
-                # )
+            if self.config.use_eikonal_loss:
+                # eikonal loss
+                grad_theta = outputs["eik_grad"]
+                loss_dict["eikonal_loss"] = (grad_theta.norm(2, dim=-1) ** 2).mean() * self.config.eikonal_loss_mult
         return loss_dict
 
     def get_image_metrics_and_images(

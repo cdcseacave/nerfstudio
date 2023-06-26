@@ -494,21 +494,7 @@ class SDFField(Field):
         camera_indices: Tensor,
     ) -> Float[Tensor, "*batch 3"]:
         """compute colors"""
-
-        # diffuse color and specular tint
-        if self.config.use_diffuse_color:
-            raw_rgb_diffuse = self.diffuse_color_pred(geo_features.view(-1, self.config.geo_feat_dim))
-        if self.config.use_specular_tint:
-            tint = self.sigmoid(self.specular_tint_pred(geo_features.view(-1, self.config.geo_feat_dim)))
-
-        normals = F.normalize(gradients, p=2, dim=-1)
-
-        if self.config.use_reflections:
-            # https://github.com/google-research/multinerf/blob/5d4c82831a9b94a87efada2eee6a993d530c4226/internal/ref_utils.py#L22
-            refdirs = 2.0 * torch.sum(normals * -directions, axis=-1, keepdims=True) * normals + directions
-            d = self.direction_encoding(refdirs)
-        else:
-            d = self.direction_encoding(directions)
+        directions_encoding = self.direction_encoding(directions)
 
         # appearance
         if self.training:
@@ -529,7 +515,7 @@ class SDFField(Field):
         hidden_input = torch.cat(
             [
                 points,
-                d,
+                directions_encoding,
                 gradients,
                 geo_features.view(-1, self.config.geo_feat_dim),
                 embedded_appearance.view(-1, self.config.appearance_embedding_dim),

@@ -416,7 +416,7 @@ class GenerfactoModel(Model):
 
         shaded, shaded_albedo = accum_mask * shaded, accum_mask * shaded_albedo
 
-        outputs["normals"] = self.shader_normals(normals, weights=accum_mask)
+        outputs["normals"] = normals
         outputs["shaded"] = shaded
         outputs["other_train_output"] = shaded_albedo + background
         outputs["shaded_albedo"] = shaded_albedo
@@ -502,7 +502,8 @@ class GenerfactoModel(Model):
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        acc = colormaps.apply_colormap(outputs["accumulation"])
+        accum_mask = outputs["accumulation"]
+        acc = colormaps.apply_colormap(accum_mask)
         depth = colormaps.apply_depth_colormap(
             outputs["depth"],
             accumulation=outputs["accumulation"],
@@ -515,6 +516,7 @@ class GenerfactoModel(Model):
             outputs["prop_depth_1"],
             accumulation=outputs["accumulation"],
         )
+        normals = self.shader_normals(outputs["normals"], weights=accum_mask)
 
         metrics_dict = {}
         images_dict = {
@@ -523,6 +525,6 @@ class GenerfactoModel(Model):
             "depth": depth,
             "prop_depth_0": prop_depth_0,
             "prop_depth_1": prop_depth_1,
-            "normals": outputs["normals"],
+            "normals": normals,
         }
         return metrics_dict, images_dict

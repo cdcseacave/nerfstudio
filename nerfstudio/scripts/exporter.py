@@ -172,7 +172,7 @@ class ExportTSDFMesh(Exporter):
     """Name of the depth output."""
     rgb_output_name: str = "rgb"
     """Name of the RGB output."""
-    resolution: Union[int, List[int]] = field(default_factory=lambda: [128, 128, 128])
+    resolution: Union[int, List[int]] = field(default_factory=lambda: [256, 256, 256])
     """Resolution of the TSDF volume or [x, y, z] resolutions individually."""
     batch_size: int = 10
     """How many depth images to integrate per batch."""
