@@ -37,13 +37,18 @@ from nerfstudio.engine.callbacks import (
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
 from nerfstudio.fields.nerfacto_field import NerfactoField
-from nerfstudio.model_components.losses import MSELoss
+from nerfstudio.model_components.losses import (
+    MSELoss,
+    orientation_loss,
+)
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
 from nerfstudio.model_components.renderers import (
     AccumulationRenderer,
     DepthRenderer,
+    NormalsRenderer,
     RGBRenderer,
 )
+from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 
@@ -84,6 +89,10 @@ class InstantNGPModelConfig(ModelConfig):
     """The color that is given to untrained areas."""
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
+    estimate_normals: bool = False
+    """Whether to predict normals or not."""
+    orientation_loss_mult: float = 0.0001
+    """Orientation loss multiplier on computed normals."""
 
 
 class NGPModel(Model):
@@ -138,6 +147,10 @@ class NGPModel(Model):
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
+        self.renderer_normals = NormalsRenderer()
+
+        # shaders
+        self.normals_shader = NormalsShader()
 
         # losses
         self.rgb_loss = MSELoss()
@@ -185,7 +198,7 @@ class NGPModel(Model):
                 cone_angle=self.config.cone_angle,
             )
 
-        field_outputs = self.field(ray_samples)
+        field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals)
 
         # accumulation
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
@@ -214,6 +227,13 @@ class NGPModel(Model):
             "depth": depth,
             "num_samples_per_ray": packed_info[:, 1],
         }
+        if self.config.estimate_normals:
+            outputs["normals"] = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMAL], weights=weights, ray_indices=ray_indices, num_rays=num_rays)
+        if self.training:
+            if self.config.estimate_normals:
+                outputs["rendered_orientation_loss"] = orientation_loss(
+                    weights.detach(), field_outputs[FieldHeadNames.NORMAL], ray_bundle.directions
+                )
         return outputs
 
     def get_metrics_dict(self, outputs, batch):
@@ -227,6 +247,12 @@ class NGPModel(Model):
         image = batch["image"].to(self.device)
         rgb_loss = self.rgb_loss(image, outputs["rgb"])
         loss_dict = {"rgb_loss": rgb_loss}
+        if self.training:
+            if self.config.estimate_normals:
+                # orientation loss for computed normals
+                loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(
+                    outputs["rendered_orientation_loss"]
+                )
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -253,7 +279,11 @@ class NGPModel(Model):
         lpips = self.lpips(image, rgb)
 
         # all of these metrics will be logged as scalars
-        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
+        metrics_dict = {
+            "psnr": float(psnr.item()),
+            "ssim": float(ssim),
+            "lpips": float(lpips)
+        }  # type: ignore
         # TODO(ethan): return an image dictionary
 
         images_dict = {
