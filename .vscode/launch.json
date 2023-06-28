@@ -32,10 +32,15 @@
       "request": "launch",
       "program": "nerfstudio/scripts/train.py",
       "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
       "args": [
-        "instant_ngp",
-        "--viewer.no-enable",
-        "--logging.event-writer=wandb"
+        // "instant-ngp",
+        // "nerfacto",
+        "neuralangelo",
+        // "--pipeline.model.estimate-normals", "True",
+        "--vis", "wandb",
+        "nerfstudio-data",
+        "--data", "data/ball",
       ]
     },
     {
