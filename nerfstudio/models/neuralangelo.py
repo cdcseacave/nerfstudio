@@ -70,6 +70,8 @@ class NeuralangeloModelConfig(ModelConfig):
     """The color that is given to untrained areas."""
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
+    eikonal_loss_mult: float = 0.01
+    """Monocular normal consistency loss multiplier."""
 
 
 class NeuralangeloModel(Model):
@@ -206,6 +208,7 @@ class NeuralangeloModel(Model):
             "accumulation": accumulation,
             "depth": depth,
             "num_samples_per_ray": packed_info[:, 1],
+            "eik_grad": field_outputs[FieldHeadNames.GRADIENT],
         }
         return outputs
 
@@ -219,7 +222,11 @@ class NeuralangeloModel(Model):
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         image = batch["image"].to(self.device)
         rgb_loss = self.rgb_loss(image, outputs["rgb"])
-        loss_dict = {"rgb_loss": rgb_loss}
+        eikonal_loss = ((outputs["eik_grad"].norm(2, dim=-1) - 1) ** 2).mean() * self.config.eikonal_loss_mult
+        loss_dict = {
+            "rgb_loss": rgb_loss,
+            "eikonal_loss": eikonal_loss,
+        }
         return loss_dict
 
     def get_image_metrics_and_images(

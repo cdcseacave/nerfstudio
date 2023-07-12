@@ -27,6 +27,20 @@
       "justMyCode": true
     },
     {
+      "name": "Python: images",
+      "type": "python",
+      "request": "launch",
+      "program": "nerfstudio/scripts/process_data.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "images",
+        "--data", "data/ball/colmap/images",
+        "--output-dir", "data/ball",
+        "--skip-colmap",
+      ]
+    },
+    {
       "name": "Python: train",
       "type": "python",
       "request": "launch",
@@ -38,18 +52,28 @@
         // "nerfacto",
         "neuralangelo",
         // "--pipeline.model.estimate-normals", "True",
+        // "--pipeline.model.use-gradient-scaling", "True",
         "--vis", "wandb",
         "nerfstudio-data",
+        "--train-split-fraction", "1.0",
         "--data", "data/ball",
       ]
     },
     {
-      "name": "Python: train ngp",
+      "name": "Python: export",
       "type": "python",
       "request": "launch",
-      "program": "nerfstudio/scripts/train.py",
+      "program": "nerfstudio/scripts/exporter.py",
       "console": "integratedTerminal",
-      "args": ["instant_ngp"]
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "pointcloud",
+        "--load-config", "outputs/unnamed/nerfacto/2023-07-08_190232/config.yml",
+        "--output-dir", "data/wheelbarrow",
+        "--num-points", "5000000",
+        "--remove-outliers", "False",
+        // "--normal-method", "open3d",
+      ]
     },
     {
       "name": "Python: train ngp nerfstudio",
