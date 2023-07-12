@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nerfstudio"
-version = "0.3.1"
+version = "0.3.2"
 description = "All-in-one repository for state-of-the-art NeRFs"
 readme = "README.md"
 license = { text="Apache 2.0"}
@@ -43,6 +43,7 @@ dependencies = [
     "pyngrok>=5.1.0",
     "python-socketio>=5.7.1",
     "pyquaternion>=0.9.9",
+    "rawpy>=0.18.1",
     "requests",
     "rich>=12.5.1",
     "scikit-image>=0.19.3",
