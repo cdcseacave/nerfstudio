@@ -42,6 +42,7 @@ from nerfstudio.exporter.exporter_utils import (
 )
 from nerfstudio.exporter.marching_cubes import (
     generate_mesh_with_multires_marching_cubes,
+    get_surface_sliding_from_sdf,
 )
 from nerfstudio.fields.sdf_field import SDFField
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
@@ -231,6 +232,56 @@ class ExportTSDFMesh(Exporter):
                 unwrap_method=self.unwrap_method,
                 num_pixels_per_side=self.num_pixels_per_side,
             )
+
+
+@dataclass
+class ExportSDFFieldMesh(Exporter):
+    """
+    Export a mesh using estimated SDFField.
+    """
+
+    # Marching cube resolution.
+    resolution: int = 1024
+    # extract the mesh using occupancy field (unisurf) or SDF, default sdf
+    is_occupancy: bool = False
+    """Minimum of the bounding box."""
+    bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0)
+    """Maximum of the bounding box."""
+    bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """marching cube threshold"""
+    marching_cube_threshold: float = 0.0
+    """create visibility mask"""
+    create_visibility_mask: bool = False
+    """save visibility grid"""
+    save_visibility_grid: bool = False
+    """visibility grid resolution"""
+    visibility_grid_resolution: int = 512
+    """threshold for considering a points is valid when splat to visibility grid"""
+    valid_points_thres: float = 0.005
+    """sub samples factor of images when creating visibility grid"""
+    sub_sample_factor: int = 8
+    """torch precision"""
+    torch_precision: Literal["highest", "high"] = "high"
+
+    def main(self) -> None:
+        """Load a checkpoint, run marching cubes, extract mesh, and save it to a ply file."""
+
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        _, pipeline, _, _ = eval_setup(self.load_config)
+
+        CONSOLE.print("Extract mesh with marching cubes and may take a while")
+
+        assert self.resolution % 512 == 0
+        # for sdf we can multi-scale extraction.
+        get_surface_sliding_from_sdf(
+            sdf=lambda x: cast(SDFField, pipeline.model.field).forward_geonetwork(x)[:, 0].contiguous(),
+            resolution=self.resolution,
+            bounding_box_min=self.bounding_box_min,
+            bounding_box_max=self.bounding_box_max,
+            output_path=str(self.output_dir / "sdffield_mesh.ply"),
+        )
 
 
 @dataclass
@@ -444,6 +495,7 @@ Commands = tyro.conf.FlagConversionOff[
     Union[
         Annotated[ExportPointCloud, tyro.conf.subcommand(name="pointcloud")],
         Annotated[ExportTSDFMesh, tyro.conf.subcommand(name="tsdf")],
+        Annotated[ExportSDFFieldMesh, tyro.conf.subcommand(name="sdffield")],
         Annotated[ExportPoissonMesh, tyro.conf.subcommand(name="poisson")],
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
         Annotated[ExportCameraPoses, tyro.conf.subcommand(name="cameras")],

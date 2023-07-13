@@ -48,11 +48,13 @@
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "args": [
-        // "instant-ngp",
+        "instant-ngp",
         // "nerfacto",
-        "neuralangelo",
-        // "--pipeline.model.estimate-normals", "True",
+        // "neuralangelo",
+        "--pipeline.model.estimate-normals", "True",
         // "--pipeline.model.use-gradient-scaling", "True",
+        // "--optimizers.fields.scheduler.max-steps", "20000",
+        "--max_num_iterations", "30000",
         "--vis", "wandb",
         "nerfstudio-data",
         "--train-split-fraction", "1.0",
@@ -68,11 +70,24 @@
       "cwd": "${workspaceFolder}",
       "args": [
         "pointcloud",
-        "--load-config", "outputs/unnamed/nerfacto/2023-07-08_190232/config.yml",
-        "--output-dir", "data/wheelbarrow",
-        "--num-points", "5000000",
+        "--load-config", "outputs/unnamed/instant-ngp/2023-07-12_104726/config.yml",
+        "--output-dir", "data/ball",
+        "--num-points", "3000000",
         "--remove-outliers", "False",
         // "--normal-method", "open3d",
+      ]
+    },
+    {
+      "name": "Python: export sdffield",
+      "type": "python",
+      "request": "launch",
+      "program": "nerfstudio/scripts/exporter.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "sdffield",
+        "--load-config", "outputs/unnamed/neuralangelo/2023-07-12_030014/config.yml",
+        "--output-dir", "data/ball",
       ]
     },
     {
