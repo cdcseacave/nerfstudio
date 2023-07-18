@@ -50,7 +50,6 @@ import socket
 import traceback
 from datetime import timedelta
 from typing import Any, Callable, Literal, Optional
-from pytorch_memlab import LineProfiler
 
 import numpy as np
 import torch
@@ -268,10 +267,4 @@ def entrypoint():
 
 
 if __name__ == "__main__":
-    use_profile = False
-    if use_profile:
-        with LineProfiler(entrypoint) as prof:
-            entrypoint()
-        prof.display()
-    else:
-        entrypoint()
+    entrypoint()

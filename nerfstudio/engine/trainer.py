@@ -84,6 +84,8 @@ class TrainerConfig(ExperimentConfig):
     """Optionally log gradients during training"""
     gradient_accumulation_steps: int = 1
     """Number of steps to accumulate gradients over."""
+    enable_profiler: bool = False
+    """Whether to enable the profiler."""
 
 
 class Trainer:
@@ -236,6 +238,14 @@ class Trainer:
 
         self._init_viewer_state()
         with TimeWriter(writer, EventName.TOTAL_TRAIN_TIME):
+            if self.config.enable_profiler:
+                prof = torch.profiler.profile(
+                        schedule=torch.profiler.schedule(wait=100, warmup=1, active=3, repeat=10),
+                        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/train'),
+                        record_shapes=True,
+                        profile_memory=True,
+                        with_stack=True
+                )
             num_iterations = self.config.max_num_iterations
             step = 0
             for step in range(self._start_step, self._start_step + num_iterations):
@@ -295,6 +305,8 @@ class Trainer:
                     self.save_checkpoint(step)
 
                 writer.write_out_storage()
+                if self.config.enable_profiler:
+                    prof.step()
 
         # save checkpoint at the end of training
         self.save_checkpoint(step)
