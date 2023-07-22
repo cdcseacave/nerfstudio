@@ -47,6 +47,7 @@
       "program": "nerfstudio/scripts/train.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
+      "justMyCode": false,
       "args": [
         "instant-ngp",
         // "nerfacto",
@@ -54,7 +55,7 @@
         "--pipeline.model.estimate-normals", "True",
         // "--pipeline.model.use-gradient-scaling", "True",
         // "--optimizers.fields.scheduler.max-steps", "20000",
-        "--max_num_iterations", "2000",
+        // "--max_num_iterations", "2000",
         // "--enable-profiler", "True",
         "--vis", "wandb",
         "nerfstudio-data",
@@ -70,6 +71,7 @@
       "program": "nerfstudio/scripts/exporter.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
+      "justMyCode": false,
       "args": [
         "pointcloud",
         "--load-config", "outputs/unnamed/instant-ngp/2023-07-12_104726/config.yml",

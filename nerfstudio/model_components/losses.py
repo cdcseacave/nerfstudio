@@ -203,6 +203,7 @@ def orientation_loss(
     w = weights
     n = normals
     v = viewdirs * -1
+    # next multiplication uses a lot of memory if the number of rows is large for w/n
     n_dot_v = (n * v[..., None, :]).sum(dim=-1)
     return (w[..., 0] * torch.fmin(torch.zeros_like(n_dot_v), n_dot_v) ** 2).sum(dim=-1)
 
