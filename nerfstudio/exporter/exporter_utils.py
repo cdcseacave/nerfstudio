@@ -92,6 +92,7 @@ def generate_point_cloud(
     bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0),
     bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     std_ratio: float = 10.0,
+    transform: str = None,
 ) -> o3d.geometry.PointCloud:
     """Generate a point cloud from a nerf.
 
@@ -199,6 +200,12 @@ def generate_point_cloud(
             normals = normals[ind]
         pcd.normals = o3d.utility.Vector3dVector(normals.double().cpu().numpy())
 
+    if transform is not None:
+        # transform point cloud to be in original coord system
+        transform_matrix = np.vstack([np.array(transform["transform"]), [0,0,0,1]])
+        scale = float(transform["scale"])
+        pcd.scale(1 / scale, center=(0,0,0))
+        pcd = pcd.transform(np.linalg.inv(transform_matrix))
     return pcd
 
 

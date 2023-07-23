@@ -48,6 +48,7 @@ from nerfstudio.fields.sdf_field import SDFField
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
+from nerfstudio.utils.io import load_from_json
 
 
 @dataclass
@@ -123,7 +124,11 @@ class ExportPointCloud(Exporter):
         if not self.output_dir.exists():
             self.output_dir.mkdir(parents=True)
 
-        _, pipeline, _, _ = eval_setup(self.load_config)
+        config, pipeline, _, _ = eval_setup(self.load_config)
+        print(f"Loaded config from {self.load_config}")
+
+        transform_path = os.path.join(config.get_base_dir(), "dataparser_transforms.json")
+        transform = load_from_json(Path(transform_path))
 
         validate_pipeline(self.normal_method, self.normal_output_name, pipeline)
 
@@ -147,6 +152,7 @@ class ExportPointCloud(Exporter):
             bounding_box_min=self.bounding_box_min,
             bounding_box_max=self.bounding_box_max,
             std_ratio=self.std_ratio,
+            transform=transform,
         )
         torch.cuda.empty_cache()
 
