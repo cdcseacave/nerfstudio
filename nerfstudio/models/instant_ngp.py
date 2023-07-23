@@ -43,6 +43,7 @@ from nerfstudio.model_components.losses import (
     distortion_loss,
     interlevel_loss,
     orientation_loss,
+    scale_gradients_by_distance_squared,
 )
 from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler
 from nerfstudio.model_components.renderers import (
@@ -104,8 +105,6 @@ class InstantNGPModelConfig(ModelConfig):
     """Slope of the annealing function for the proposal weights."""
     proposal_weights_anneal_max_num_iters: int = 1000
     """Max num iterations for the annealing function."""
-    use_appearance_embedding: bool = False
-    """Whether to use an appearance embedding."""
     background_color: Literal["random", "black", "white"] = "random"
     """The color that is given to untrained areas."""
     disable_scene_contraction: bool = False
@@ -144,11 +143,11 @@ class NGPModel(Model):
 
         self.field = NerfactoField(
             aabb=self.scene_box.aabb,
-            appearance_embedding_dim=0 if self.config.use_appearance_embedding else 32,
             num_images=self.num_train_data,
             log2_hashmap_size=self.config.log2_hashmap_size,
             max_res=self.config.max_res,
             spatial_distortion=scene_contraction,
+            use_average_appearance_embedding=True,
         )
 
         self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
@@ -251,6 +250,7 @@ class NGPModel(Model):
         ray_samples, weights_list, ray_samples_list = self.sampler(ray_bundle, density_fns=self.density_fns)
 
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals)
+        field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
 
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
         weights_list.append(weights)
