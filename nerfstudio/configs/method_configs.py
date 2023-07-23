@@ -319,10 +319,14 @@ method_configs["instant-ngp"] = TrainerConfig(
         model=InstantNGPModelConfig(eval_num_rays_per_chunk=8192),
     ),
     optimizers={
+        "proposal_networks": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
+        },
         "fields": {
             "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
-        }
+        },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 12),
     vis="viewer",
@@ -340,8 +344,6 @@ method_configs["instant-ngp-bounded"] = TrainerConfig(
         model=InstantNGPModelConfig(
             eval_num_rays_per_chunk=8192,
             grid_levels=1,
-            alpha_thre=0.0,
-            cone_angle=0.0,
             disable_scene_contraction=True,
             near_plane=0.01,
             background_color="black",
