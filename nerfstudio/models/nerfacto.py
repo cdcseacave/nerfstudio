@@ -163,7 +163,7 @@ class NerfactoModel(Model):
             implementation=self.config.implementation,
         )
 
-        self.density_fns = []
+        density_fns = []
         num_prop_nets = self.config.num_proposal_iterations
         # Build the proposal network(s)
         self.proposal_networks = torch.nn.ModuleList()
@@ -177,7 +177,7 @@ class NerfactoModel(Model):
                 implementation=self.config.implementation,
             )
             self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for _ in range(num_prop_nets)])
+            density_fns.extend([network.density_fn for _ in range(num_prop_nets)])
         else:
             for i in range(num_prop_nets):
                 prop_net_args = self.config.proposal_net_args_list[min(i, len(self.config.proposal_net_args_list) - 1)]
@@ -188,7 +188,7 @@ class NerfactoModel(Model):
                     implementation=self.config.implementation,
                 )
                 self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for network in self.proposal_networks])
+            density_fns.extend([network.density_fn for network in self.proposal_networks])
 
         # Samplers
         def update_schedule(step):
@@ -208,6 +208,7 @@ class NerfactoModel(Model):
             num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
             num_proposal_network_iterations=self.config.num_proposal_iterations,
             single_jitter=self.config.use_single_jitter,
+            density_fns=density_fns,
             update_sched=update_schedule,
             initial_sampler=initial_sampler,
         )
@@ -274,7 +275,7 @@ class NerfactoModel(Model):
 
     def get_outputs(self, ray_bundle: RayBundle):
         ray_samples: RaySamples
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle)
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals, compute_gradients=self.config.use_eikonal_loss)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)

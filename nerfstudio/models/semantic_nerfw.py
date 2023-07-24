@@ -109,12 +109,12 @@ class SemanticNerfWModel(Model):
         if self.config.use_same_proposal_network:
             network = HashMLPDensityField(self.scene_box.aabb, spatial_distortion=scene_contraction)
             self.proposal_networks.append(network)
-            self.density_fns = [network.density_fn for _ in range(self.config.num_proposal_iterations)]
+            density_fns = [network.density_fn for _ in range(self.config.num_proposal_iterations)]
         else:
             for _ in range(self.config.num_proposal_iterations):
                 network = HashMLPDensityField(self.scene_box.aabb, spatial_distortion=scene_contraction)
                 self.proposal_networks.append(network)
-            self.density_fns = [network.density_fn for network in self.proposal_networks]
+            density_fns = [network.density_fn for network in self.proposal_networks]
 
         # Collider
         self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
@@ -125,7 +125,8 @@ class SemanticNerfWModel(Model):
             num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
             num_proposal_network_iterations=self.config.num_proposal_iterations,
             single_jitter=self.config.use_single_jitter,
-        )
+            density_fns=density_fns,
+    )
 
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
@@ -177,7 +178,7 @@ class SemanticNerfWModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle)
         field_outputs = self.field(ray_samples)
 
         if self.training and self.config.use_transient_embedding:

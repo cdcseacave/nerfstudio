@@ -45,7 +45,7 @@ from nerfstudio.model_components.losses import (
     orientation_loss,
     scale_gradients_by_distance_squared,
 )
-from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler
+from nerfstudio.model_components.ray_samplers import UniPDFSampler, ProposalNetworkSampler
 from nerfstudio.model_components.renderers import (
     AccumulationRenderer,
     DepthRenderer,
@@ -91,7 +91,7 @@ class InstantNGPModelConfig(ModelConfig):
     proposal_warmup: int = 5000
     """Scales n from 1 to proposal_update_every over this many steps"""
     num_proposal_iterations: int = 2
-    """Number of proposal network iterations."""
+    """Number of proposal network iterations: 2 by default or 0 for using UniPDF sampler."""
     proposal_net_args_list: List[Dict] = field(
         default_factory=lambda: [
             {"hidden_dim": 16, "log2_hashmap_size": 17, "num_levels": 5, "max_res": 128, "use_linear": False},
@@ -152,35 +152,44 @@ class NGPModel(Model):
 
         self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
 
-        # Build the proposal network(s)
-        num_prop_nets = self.config.num_proposal_iterations
-        self.proposal_networks = torch.nn.ModuleList()
-        for i in range(num_prop_nets):
-            prop_net_args = self.config.proposal_net_args_list[min(i, len(self.config.proposal_net_args_list) - 1)]
-            network = HashMLPDensityField(
-                self.scene_box.aabb,
-                spatial_distortion=scene_contraction,
-                **prop_net_args,
-                implementation="tcnn",
-            )
-            self.proposal_networks.append(network)
-        self.density_fns = [network.density_fn for network in self.proposal_networks]
-
         def update_schedule(step):
             return np.clip(
                 np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
                 1,
                 self.config.proposal_update_every,
             )
-        
-        self.sampler = ProposalNetworkSampler(
-            num_nerf_samples_per_ray=self.config.num_samples,
-            num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
-            num_proposal_network_iterations=self.config.num_proposal_iterations,
-            single_jitter=True,
-            update_sched=update_schedule,
-            initial_sampler=None,
-        )
+
+        if self.config.num_proposal_iterations == 0:
+            # Use a uniform + PDF sampler
+            self.sampler = UniPDFSampler(
+                num_pdf_samples_per_ray=self.config.num_samples,
+                density_fn = self.field.density_fn,
+                update_sched=update_schedule,
+            )
+        else:
+            # Build the proposal network(s)
+            num_prop_nets = self.config.num_proposal_iterations
+            self.proposal_networks = torch.nn.ModuleList()
+            for i in range(num_prop_nets):
+                prop_net_args = self.config.proposal_net_args_list[min(i, len(self.config.proposal_net_args_list) - 1)]
+                network = HashMLPDensityField(
+                    self.scene_box.aabb,
+                    spatial_distortion=scene_contraction,
+                    **prop_net_args,
+                    implementation="tcnn",
+                )
+                self.proposal_networks.append(network)
+            density_fns = [network.density_fn for network in self.proposal_networks]
+            
+            self.sampler = ProposalNetworkSampler(
+                num_nerf_samples_per_ray=self.config.num_samples,
+                num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
+                num_proposal_network_iterations=self.config.num_proposal_iterations,
+                single_jitter=True,
+                density_fns=density_fns,
+                update_sched=update_schedule,
+                initial_sampler=None,
+            )
 
         # Collider
         self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
@@ -207,14 +216,15 @@ class NGPModel(Model):
         if self.field is None:
             raise ValueError("populate_fields() must be called before get_param_groups")
         param_groups["fields"] = list(self.field.parameters())
-        param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
+        if self.config.num_proposal_iterations > 0:
+            param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
         return param_groups
 
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         callbacks = []
-        if self.config.use_proposal_weight_anneal:
+        if self.config.use_proposal_weight_anneal and self.config.num_proposal_iterations > 0:
             # anneal the weights of the proposal network before doing PDF sampling
             N = self.config.proposal_weights_anneal_max_num_iters
 
@@ -247,7 +257,7 @@ class NGPModel(Model):
     def get_outputs(self, ray_bundle: RayBundle):
         assert self.field is not None
 
-        ray_samples, weights_list, ray_samples_list = self.sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list = self.sampler(ray_bundle)
 
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals)
         field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)

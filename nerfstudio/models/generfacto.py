@@ -221,7 +221,7 @@ class GenerfactoModel(Model):
         self.field = GenerfactoField(self.scene_box.aabb, max_res=self.config.max_res)
 
         # samplers
-        self.density_fns = []
+        density_fns = []
         num_prop_nets = self.config.num_proposal_iterations
         # Build the proposal network(s)
         self.proposal_networks = torch.nn.ModuleList()
@@ -232,7 +232,7 @@ class GenerfactoModel(Model):
                 self.scene_box.aabb, **prop_net_args, implementation=self.config.implementation
             )
             self.proposal_networks.append(network)
-        self.density_fns.extend([network.density_fn for network in self.proposal_networks])
+        density_fns.extend([network.density_fn for network in self.proposal_networks])
 
         def update_schedule(step):
             return np.clip(
@@ -246,6 +246,7 @@ class GenerfactoModel(Model):
             num_proposal_samples_per_ray=self.config.num_proposal_samples_per_ray,
             num_proposal_network_iterations=self.config.num_proposal_iterations,
             single_jitter=self.config.use_single_jitter,
+            density_fns=density_fns,
             update_sched=update_schedule,
             initial_sampler=UniformSampler(single_jitter=self.config.use_single_jitter),
         )
@@ -358,7 +359,7 @@ class GenerfactoModel(Model):
     def get_outputs(self, ray_bundle: RayBundle):  # pylint: disable=too-many-statements
         # uniform sampling
         background_rgb = self.field.get_background_rgb(ray_bundle)
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle)
         field_outputs = self.field(ray_samples, compute_normals=True)
         density = field_outputs[FieldHeadNames.DENSITY]
 
