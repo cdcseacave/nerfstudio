@@ -340,7 +340,6 @@ method_configs["instant-ngp-bounded"] = TrainerConfig(
         datamanager=VanillaDataManagerConfig(dataparser=InstantNGPDataParserConfig(), train_num_rays_per_batch=8192),
         model=InstantNGPModelConfig(
             eval_num_rays_per_chunk=8192,
-            grid_levels=1,
             disable_scene_contraction=True,
             near_plane=0.01,
             background_color="black",
