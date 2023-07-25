@@ -537,26 +537,16 @@ class UniPDFSampler(Sampler):
         num_pdf_samples_per_ray: int = 48,
         density_fn: Optional[Callable] = None,
         single_jitter: bool = True,
-        update_sched: Callable = lambda x: 1,
     ) -> None:
         super().__init__()
         assert density_fn is not None
         self.num_uniform_samples_per_ray = num_uniform_samples_per_ray
         self.num_pdf_samples_per_ray = num_pdf_samples_per_ray
         self.density_fn = density_fn
-        self.update_sched = update_sched
 
         # samplers
         self.uniform_sampler = UniformLinDispPiecewiseSampler(single_jitter=single_jitter)
         self.pdf_sampler = PDFSampler(include_original=False, single_jitter=single_jitter)
-
-        self._steps_since_update = 0
-        self._step = 0
-
-    def step_cb(self, step):
-        """Callback to register a training step has passed. This is used to keep track of the sampling schedule"""
-        self._step = step
-        self._steps_since_update += 1
 
     def generate_ray_samples(
         self,
@@ -569,14 +559,8 @@ class UniPDFSampler(Sampler):
 
         # Uniform sampling because we need to start with some samples
         ray_samples = self.uniform_sampler(ray_bundle, num_samples=self.num_uniform_samples_per_ray)
-        updated = self._steps_since_update > self.update_sched(self._step) or self._step < 10
-        if updated:
-            # always update on the first step or the inf check in grad scaling crashes
+        with torch.no_grad():
             density = self.density_fn(ray_samples.frustums.get_positions())
-            self._steps_since_update = 0
-        else:
-            with torch.no_grad():
-                density = self.density_fn(ray_samples.frustums.get_positions())
         weights = ray_samples.get_weights(density)
         weights_list.append(weights)  # (num_rays, num_samples)
         ray_samples_list.append(ray_samples)

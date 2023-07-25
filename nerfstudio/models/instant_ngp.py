@@ -90,7 +90,7 @@ class InstantNGPModelConfig(ModelConfig):
     """Sample every n steps after the warmup"""
     proposal_warmup: int = 5000
     """Scales n from 1 to proposal_update_every over this many steps"""
-    num_proposal_iterations: int = 2
+    num_proposal_iterations: int = 0
     """Number of proposal network iterations: 2 by default or 0 for using UniPDF sampler."""
     proposal_net_args_list: List[Dict] = field(
         default_factory=lambda: [
@@ -152,19 +152,11 @@ class NGPModel(Model):
 
         self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
 
-        def update_schedule(step):
-            return np.clip(
-                np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
-                1,
-                self.config.proposal_update_every,
-            )
-
         if self.config.num_proposal_iterations == 0:
             # Use a uniform + PDF sampler
             self.sampler = UniPDFSampler(
                 num_pdf_samples_per_ray=self.config.num_samples,
                 density_fn = self.field.density_fn,
-                update_sched=update_schedule,
             )
         else:
             # Build the proposal network(s)
@@ -180,6 +172,13 @@ class NGPModel(Model):
                 )
                 self.proposal_networks.append(network)
             density_fns = [network.density_fn for network in self.proposal_networks]
+
+            def update_schedule(step):
+                return np.clip(
+                    np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
+                    1,
+                    self.config.proposal_update_every,
+                )
             
             self.sampler = ProposalNetworkSampler(
                 num_nerf_samples_per_ray=self.config.num_samples,
