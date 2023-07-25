@@ -53,7 +53,6 @@ from nerfstudio.model_components.renderers import (
     RGBRenderer,
 )
 from nerfstudio.model_components.scene_colliders import NearFarCollider
-from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 
@@ -70,10 +69,6 @@ class InstantNGPModelConfig(ModelConfig):
     """Whether to create a scene collider to filter rays."""
     collider_params: Optional[Dict[str, float]] = None
     """Instant NGP doesn't use a collider."""
-    grid_resolution: int = 128
-    """Resolution of the grid used for the field."""
-    grid_levels: int = 4
-    """Levels of the grid used for the field."""
     max_res: int = 2048
     """Maximum resolution of the hashmap for the base mlp."""
     log2_hashmap_size: int = 19
@@ -198,9 +193,6 @@ class NGPModel(Model):
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
         self.renderer_normals = NormalsRenderer()
-
-        # shaders
-        self.normals_shader = NormalsShader()
 
         # losses
         self.rgb_loss = MSELoss()

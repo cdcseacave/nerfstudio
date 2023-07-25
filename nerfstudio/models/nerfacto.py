@@ -44,7 +44,6 @@ from nerfstudio.model_components.losses import (
 from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler, UniformSampler
 from nerfstudio.model_components.renderers import AccumulationRenderer, DepthRenderer, NormalsRenderer, RGBRenderer
 from nerfstudio.model_components.scene_colliders import NearFarCollider
-from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 
@@ -223,9 +222,6 @@ class NerfactoModel(Model):
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer()
         self.renderer_normals = NormalsRenderer()
-
-        # shaders
-        self.normals_shader = NormalsShader()
 
         # losses
         self.rgb_loss = MSELoss()
