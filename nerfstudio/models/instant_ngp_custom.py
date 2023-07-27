@@ -55,8 +55,6 @@ class InstantNGPCustomModelConfig(ModelConfig):
     """Whether to create a scene collider to filter rays."""
     collider_params: Optional[Dict[str, float]] = None
     """Instant NGP doesn't use a collider."""
-    max_res: int = 2048
-    """Maximum resolution of the hashmap for the base mlp."""
     log2_hashmap_size: int = 19
     """Size of the hashmap for the base mlp"""
     near_plane: float = 0.05
@@ -101,16 +99,14 @@ class NGPCustomModel(Model):
         else:
             scene_contraction = SceneContraction(order=float("inf"))
 
+        # Fields
         self.field = NerfactoField(
             aabb=self.scene_box.aabb,
             num_images=self.num_train_data,
             log2_hashmap_size=self.config.log2_hashmap_size,
-            max_res=self.config.max_res,
             spatial_distortion=scene_contraction,
             use_average_appearance_embedding=True,
         )
-
-        self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
 
         # Use a uniform + PDF sampler
         self.sampler = UniPDFSampler(
@@ -124,7 +120,7 @@ class NGPCustomModel(Model):
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
-        self.renderer_depth = DepthRenderer(method="expected")
+        self.renderer_depth = DepthRenderer()
         self.renderer_normals = NormalsRenderer()
 
         # losses
@@ -137,8 +133,6 @@ class NGPCustomModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
-        if self.field is None:
-            raise ValueError("populate_fields() must be called before get_param_groups")
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
@@ -149,10 +143,7 @@ class NGPCustomModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        assert self.field is not None
-
         ray_samples, weights_list, ray_samples_list = self.sampler(ray_bundle)
-
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals)
         field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
 
@@ -160,13 +151,8 @@ class NGPCustomModel(Model):
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
 
-        rgb = self.renderer_rgb(
-            rgb=field_outputs[FieldHeadNames.RGB],
-            weights=weights,
-        )
-        depth = self.renderer_depth(
-            weights=weights, ray_samples=ray_samples
-        )
+        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
+        depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
         outputs = {
@@ -174,8 +160,10 @@ class NGPCustomModel(Model):
             "accumulation": accumulation,
             "depth": depth,
         }
+
         if self.config.estimate_normals:
             outputs["normals"] = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
+        # These use a lot of GPU memory, so we avoid storing them for eval.
         if self.training:
             outputs["weights_list"] = weights_list
             outputs["ray_samples_list"] = ray_samples_list
@@ -188,23 +176,23 @@ class NGPCustomModel(Model):
 
     def get_metrics_dict(self, outputs, batch):
         metrics_dict = {}
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        gt_rgb = batch["image"].to(self.device)  # RGB or RGBA image
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)  # Blend if RGBA
+        predicted_rgb = outputs["rgb"]
+        metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
         if self.training:
             metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = {}
-        image = batch["image"][..., :3].to(self.device)
-        pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
+        image = batch["image"].to(self.device)
+        pred_rgb, gt_rgb = self.renderer_rgb.blend_background_for_loss_computation(
             pred_image=outputs["rgb"],
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-        rgb_loss = self.rgb_loss(image, pred_rgb)
-        loss_dict["rgb_loss"] = rgb_loss
+        loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
         if self.training:
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
@@ -221,26 +209,26 @@ class NGPCustomModel(Model):
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        rgb = outputs["rgb"]
+        predicted_rgb = outputs["rgb"]  # Blended with background (black if random background)
+        gt_rgb = batch["image"].to(self.device)
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)
         acc = colormaps.apply_colormap(outputs["accumulation"])
         depth = colormaps.apply_depth_colormap(
             outputs["depth"],
             accumulation=outputs["accumulation"],
         )
 
-        combined_rgb = torch.cat([image, rgb], dim=1)
+        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
         combined_depth = torch.cat([depth], dim=1)
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-        image = torch.moveaxis(image, -1, 0)[None, ...]
-        rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
+        gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
+        predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
 
-        psnr = self.psnr(image, rgb)
-        ssim = self.ssim(image, rgb)
-        lpips = self.lpips(image, rgb)
+        psnr = self.psnr(gt_rgb, predicted_rgb)
+        ssim = self.ssim(gt_rgb, predicted_rgb)
+        lpips = self.lpips(gt_rgb, predicted_rgb)
 
         # all of these metrics will be logged as scalars
         metrics_dict = {

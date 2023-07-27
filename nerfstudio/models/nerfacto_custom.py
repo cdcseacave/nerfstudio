@@ -55,20 +55,12 @@ class NerfactoCustomModelConfig(ModelConfig):
     """Distortion loss multiplier."""
     orientation_loss_mult: float = 0.0001
     """Orientation loss multiplier on computed normals."""
-    use_average_appearance_embedding: bool = True
-    """Whether to use average appearance embedding or zeros for inference."""
     use_single_jitter: bool = True
     """Whether use single jitter or not for the proposal networks."""
     estimate_normals: bool = True
     """Whether to predict normals or not."""
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
-    use_gradient_scaling: bool = True
-    """Use gradient scaler where the gradients are lower for points closer to the camera."""
-    implementation: Literal["tcnn", "torch"] = "tcnn"
-    """Which implementation to use for the model."""
-    appearance_embed_dim: int = 32
-    """Dimension of the appearance embedding."""
     use_eikonal_loss: bool = False
     """Whether to disable eikonal loss; seems to help but it does not makes much sens for density field."""
     eikonal_loss_mult: float = 0.01
@@ -99,9 +91,7 @@ class NerfactoCustomModel(Model):
             num_images=self.num_train_data,
             log2_hashmap_size=self.config.log2_hashmap_size,
             spatial_distortion=scene_contraction,
-            use_average_appearance_embedding=self.config.use_average_appearance_embedding,
-            appearance_embedding_dim=self.config.appearance_embed_dim,
-            implementation=self.config.implementation,
+            use_average_appearance_embedding=True,
         )
 
         # Use a uniform + PDF sampler
@@ -129,7 +119,6 @@ class NerfactoCustomModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
-        # param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
@@ -140,11 +129,9 @@ class NerfactoCustomModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        ray_samples: RaySamples
         ray_samples, weights_list, ray_samples_list = self.sampler(ray_bundle)
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.estimate_normals, compute_gradients=self.config.use_eikonal_loss)
-        if self.config.use_gradient_scaling:
-            field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
+        field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
 
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
         weights_list.append(weights)
@@ -166,12 +153,10 @@ class NerfactoCustomModel(Model):
         if self.training:
             outputs["weights_list"] = weights_list
             outputs["ray_samples_list"] = ray_samples_list
-
             if self.config.estimate_normals:
                 outputs["rendered_orientation_loss"] = orientation_loss(
                     weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
                 )
-
             if self.config.use_eikonal_loss:
                 outputs["eik_grad"] = field_outputs[FieldHeadNames.GRADIENT]
 
@@ -183,7 +168,6 @@ class NerfactoCustomModel(Model):
         gt_rgb = self.renderer_rgb.blend_background(gt_rgb)  # Blend if RGBA
         predicted_rgb = outputs["rgb"]
         metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
-
         if self.training:
             metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
@@ -196,7 +180,6 @@ class NerfactoCustomModel(Model):
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-
         loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
         if self.training:
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
