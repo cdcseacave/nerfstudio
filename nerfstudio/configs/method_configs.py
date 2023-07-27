@@ -56,7 +56,6 @@ from nerfstudio.models.instant_ngp_custom import InstantNGPCustomModelConfig
 from nerfstudio.models.neuralangelo import NeuralangeloModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
-from nerfstudio.models.nerfacto_custom import NerfactoCustomModelConfig
 from nerfstudio.models.neus import NeuSModelConfig
 from nerfstudio.models.neus_facto import NeuSFactoModelConfig
 from nerfstudio.models.semantic_nerfw import SemanticNerfWModelConfig
@@ -69,7 +68,6 @@ from nerfstudio.plugins.registry import discover_methods
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
-    "nerfacto-custom": "Custom nerfcato pipeline.",
     "depth-nerfacto": "Nerfacto with depth supervision.",
     "volinga": "Real-time rendering model from Volinga. Directly exportable to NVOL format at https://volinga.ai/",
     "neuralangelo": "Implementation of Neuralangelo, using SDFField.",
@@ -117,30 +115,6 @@ method_configs["nerfacto"] = TrainerConfig(
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
-)
-
-method_configs["nerfacto-custom"] = TrainerConfig(
-    method_name="nerfacto",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
-    max_num_iterations=30000,
-    mixed_precision=True,
-    pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(
-            dataparser=NerfstudioDataParserConfig(),
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
-        ),
-        model=NerfactoCustomModelConfig(eval_num_rays_per_chunk=8192),
-    ),
-    optimizers={
-        "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
-        },
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=1 << 12),
     vis="viewer",
 )
 
