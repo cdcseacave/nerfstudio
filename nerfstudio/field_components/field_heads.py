@@ -31,7 +31,8 @@ class FieldHeadNames(Enum):
     RGB = "rgb"
     SH = "sh"
     DENSITY = "density"
-    NORMAL = "normals"
+    NORMALS = "normals"
+    PRED_NORMALS = "pred_normals"
     UNCERTAINTY = "uncertainty"
     BACKGROUND_RGB = "background_rgb"
     TRANSIENT_RGB = "transient_rgb"
@@ -183,3 +184,21 @@ class SemanticFieldHead(FieldHead):
 
     def __init__(self, num_classes: int, in_dim: Optional[int] = None) -> None:
         super().__init__(in_dim=in_dim, out_dim=num_classes, field_head_name=FieldHeadNames.SEMANTICS, activation=None)
+
+
+class PredNormalsFieldHead(FieldHead):
+    """Predicted normals output.
+
+    Args:
+        in_dim: input dimension. If not defined in constructor, it must be set later.
+        activation: output head activation
+    """
+
+    def __init__(self, in_dim: Optional[int] = None, activation: Optional[nn.Module] = nn.Tanh()) -> None:
+        super().__init__(in_dim=in_dim, out_dim=3, field_head_name=FieldHeadNames.PRED_NORMALS, activation=activation)
+
+    def forward(self, in_tensor: Float[Tensor, "*bs in_dim"]) -> Float[Tensor, "*bs out_dim"]:
+        """Needed to normalize the output into valid normals."""
+        out_tensor = super().forward(in_tensor)
+        out_tensor = torch.nn.functional.normalize(out_tensor, dim=-1)
+        return out_tensor

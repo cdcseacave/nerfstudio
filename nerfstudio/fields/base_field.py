@@ -130,7 +130,7 @@ class Field(nn.Module):
             with torch.enable_grad():
                 normals, gradients = self.get_normals()
             if compute_normals:
-                field_outputs[FieldHeadNames.NORMAL] = normals  # type: ignore
+                field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
             if compute_gradients:
                 field_outputs[FieldHeadNames.GRADIENT] = gradients  # type: ignore
         return field_outputs

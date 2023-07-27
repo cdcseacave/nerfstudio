@@ -29,6 +29,7 @@ from nerfstudio.field_components.embedding import Embedding
 from nerfstudio.field_components.encodings import HashEncoding, NeRFEncoding, SHEncoding
 from nerfstudio.field_components.field_heads import (
     FieldHeadNames,
+    PredNormalsFieldHead,
     SemanticFieldHead,
     TransientDensityFieldHead,
     TransientRGBFieldHead,
@@ -62,6 +63,7 @@ class NerfactoField(Field):
         use_transient_embedding: whether to use transient embedding
         use_semantics: whether to use semantic segmentation
         num_semantic_classes: number of semantic classes
+        use_pred_normals: whether to use predicted normals
         use_average_appearance_embedding: whether to use average appearance embedding or zeros for inference
         spatial_distortion: spatial distortion to apply to the scene
     """
@@ -90,6 +92,7 @@ class NerfactoField(Field):
         use_semantics: bool = False,
         num_semantic_classes: int = 100,
         pass_semantic_gradients: bool = False,
+        use_pred_normals: bool = False,
         use_average_appearance_embedding: bool = False,
         spatial_distortion: Optional[SpatialDistortion] = None,
         implementation: Literal["tcnn", "torch"] = "tcnn",
@@ -110,6 +113,7 @@ class NerfactoField(Field):
         self.use_average_appearance_embedding = use_average_appearance_embedding
         self.use_transient_embedding = use_transient_embedding
         self.use_semantics = use_semantics
+        self.use_pred_normals = use_pred_normals
         self.pass_semantic_gradients = pass_semantic_gradients
         self.base_res = base_res
 
@@ -172,6 +176,19 @@ class NerfactoField(Field):
             self.field_head_semantics = SemanticFieldHead(
                 in_dim=self.mlp_semantics.get_out_dim(), num_classes=num_semantic_classes
             )
+
+        # predicted normals
+        if self.use_pred_normals:
+            self.mlp_pred_normals = MLP(
+                in_dim=self.geo_feat_dim + self.position_encoding.get_out_dim(),
+                num_layers=3,
+                layer_width=64,
+                out_dim=hidden_dim_transient,
+                activation=nn.ReLU(),
+                out_activation=None,
+                implementation=implementation,
+            )
+            self.field_head_pred_normals = PredNormalsFieldHead(in_dim=self.mlp_pred_normals.get_out_dim())
 
         self.mlp_head = MLP(
             in_dim=self.direction_encoding.get_out_dim() + self.geo_feat_dim + self.appearance_embedding_dim,
@@ -259,6 +276,16 @@ class NerfactoField(Field):
 
             x = self.mlp_semantics(semantics_input).view(*outputs_shape, -1).to(directions)
             outputs[FieldHeadNames.SEMANTICS] = self.field_head_semantics(x)
+
+        # predicted normals
+        if self.use_pred_normals:
+            positions = ray_samples.frustums.get_positions()
+
+            positions_flat = self.position_encoding(positions.view(-1, 3))
+            pred_normals_inp = torch.cat([positions_flat, density_embedding.view(-1, self.geo_feat_dim)], dim=-1)
+
+            x = self.mlp_pred_normals(pred_normals_inp).view(*outputs_shape, -1).to(directions)
+            outputs[FieldHeadNames.PRED_NORMALS] = self.field_head_pred_normals(x)
 
         h = torch.cat(
             [

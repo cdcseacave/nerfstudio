@@ -221,7 +221,7 @@ class SurfaceModel(Model):
         # the rendered depth is point-to-point distance and we should convert to depth
         depth = depth / ray_bundle.metadata["directions_norm"]
 
-        normal = self.renderer_normal(semantics=field_outputs[FieldHeadNames.NORMAL], weights=weights)
+        normal = self.renderer_normal(semantics=field_outputs[FieldHeadNames.NORMALS], weights=weights)
         accumulation = self.renderer_accumulation(weights=weights)
 
         # background model
