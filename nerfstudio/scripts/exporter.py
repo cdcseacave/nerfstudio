@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
+import cv2
 import numpy as np
 import open3d as o3d
 import torch
@@ -38,6 +40,7 @@ from nerfstudio.exporter import texture_utils, tsdf_utils
 from nerfstudio.exporter.exporter_utils import (
     collect_camera_poses,
     generate_point_cloud,
+    render_depthmap_cameras,
     get_mesh_from_filename,
 )
 from nerfstudio.exporter.marching_cubes import (
@@ -241,6 +244,68 @@ class ExportTSDFMesh(Exporter):
                 unwrap_method=self.unwrap_method,
                 num_pixels_per_side=self.num_pixels_per_side,
             )
+
+
+@dataclass
+class ExportDepthMaps(Exporter):
+    """Export NeRF as one depth map for each input view."""
+
+    downscale_factor: int = 1
+    """Downscale the images starting from the resolution used for training."""
+    depth_output_name: str = "depth"
+    """Name of the depth output."""
+    normal_output_name: str = "normals"
+    """Name of the normal output."""
+    rgb_output_name: str = "rgb"
+    """Name of the RGB output."""
+    use_bounding_box: bool = True
+    """Only query points within the bounding box"""
+    bounding_box_min: Tuple[float, float, float] = (-1, -1, -1)
+    """Minimum of the bounding box, used if use_bounding_box is True."""
+    bounding_box_max: Tuple[float, float, float] = (1, 1, 1)
+    """Maximum of the bounding box, used if use_bounding_box is True."""
+    num_rays_per_batch: int = 32768
+    """Number of rays to evaluate per batch. Decrease if you run out of memory."""
+
+    def main(self) -> None:
+        """Export depth maps."""
+
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        _, pipeline, _, _ = eval_setup(self.load_config)
+        print(f"Loaded config from {self.load_config}")
+
+        # Increase the batchsize to speed up the evaluation.
+        assert isinstance(pipeline.datamanager, VanillaDataManager)
+        assert pipeline.datamanager.train_pixel_sampler is not None
+        pipeline.datamanager.train_pixel_sampler.num_rays_per_batch = self.num_rays_per_batch
+        dataparser_outputs = pipeline.datamanager.train_dataset._dataparser_outputs
+        cameras = dataparser_outputs.cameras
+
+        depth_images, normal_images, color_images = render_depthmap_cameras(
+            pipeline,
+            cameras,
+            depth_output_name=self.depth_output_name,
+            normal_output_name=self.normal_output_name if self.normal_output_name != "" else None,
+            rgb_output_name=self.rgb_output_name if self.rgb_output_name != "" else None,
+            rendered_resolution_scaling_factor=1.0/self.downscale_factor,
+            disable_distortion=True,
+            return_rgba_images=True,
+        )
+        torch.cuda.empty_cache()
+
+        CONSOLE.print("Saving depth-maps...")
+        for i in range(len(depth_images)):
+            cv2.imwrite(str(self.output_dir / f"depth{i:04d}.exr"), depth_images[i])
+            if normal_images:
+                cv2.imwrite(str(self.output_dir / f"normal{i:04d}.exr"), normal_images[i])
+            if color_images:
+                if color_images[i].shape[-1] == 4:
+                    cv2.imwrite(str(self.output_dir / f"color{i:04d}.png"), color_images[i])
+                else:
+                    cv2.imwrite(str(self.output_dir / f"color{i:04d}.jpg"), color_images[i])
+        CONSOLE.print("...done")
 
 
 @dataclass
@@ -507,6 +572,7 @@ Commands = tyro.conf.FlagConversionOff[
     Union[
         Annotated[ExportPointCloud, tyro.conf.subcommand(name="pointcloud")],
         Annotated[ExportTSDFMesh, tyro.conf.subcommand(name="tsdf")],
+        Annotated[ExportDepthMaps, tyro.conf.subcommand(name="depthmaps")],
         Annotated[ExportSDFFieldMesh, tyro.conf.subcommand(name="sdffield")],
         Annotated[ExportPoissonMesh, tyro.conf.subcommand(name="poisson")],
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
