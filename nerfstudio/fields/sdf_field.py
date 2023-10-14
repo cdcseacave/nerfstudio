@@ -39,6 +39,8 @@ from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SpatialDistortion
 from nerfstudio.fields.base_field import Field, FieldConfig
 
+# from nerfstudio.utils.external import tcnn
+
 try:
     import tinycudann as tcnn
 except ImportError:
@@ -203,10 +205,10 @@ class SDFField(Field):
         self.divide_factor = self.config.divide_factor
 
         self.num_levels = self.config.num_levels
-        self.max_res = self.config.max_res 
-        self.base_res = self.config.base_res 
-        self.log2_hashmap_size = self.config.log2_hashmap_size 
-        self.features_per_level = self.config.hash_features_per_level 
+        self.max_res = self.config.max_res
+        self.base_res = self.config.base_res
+        self.log2_hashmap_size = self.config.log2_hashmap_size
+        self.features_per_level = self.config.hash_features_per_level
         use_hash = True
         smoothstep = self.config.hash_smoothstep
         self.growth_factor = np.exp((np.log(self.max_res) - np.log(self.base_res)) / (self.num_levels - 1))
@@ -332,12 +334,12 @@ class SDFField(Field):
 
     def update_mask(self, level: int):
         self.hash_encoding_mask[:] = 1.0
-        self.hash_encoding_mask[level * self.features_per_level:] = 0
-        
+        self.hash_encoding_mask[level * self.features_per_level :] = 0
+
     def forward_geonetwork(self, inputs):
         """forward the geonetwork"""
         if self.use_grid_feature:
-            #TODO normalize inputs depending on the whether we model the background or not
+            # TODO normalize inputs depending on the whether we model the background or not
             # map range [-2, 2] to [0, 1]
             positions = (inputs + 2.0) / 4.0
             feature = self.encoding(positions)
@@ -349,7 +351,7 @@ class SDFField(Field):
         pe = self.position_encoding(inputs)
         if not self.config.use_position_encoding:
             pe = torch.zeros_like(pe)
-        
+
         inputs = torch.cat((inputs, pe, feature), dim=-1)
 
         x = inputs
@@ -537,7 +539,7 @@ class SDFField(Field):
 
         return rgb
 
-    def get_outputs(self, ray_samples: RaySamples, return_alphas: bool=False):
+    def get_outputs(self, ray_samples: RaySamples, return_alphas: bool = False):
         """compute output of ray samples"""
         if ray_samples.camera_indices is None:
             raise AttributeError("Camera indices are not provided.")
@@ -567,7 +569,9 @@ class SDFField(Field):
                 skip_spatial_distortion=True,
                 return_sdf=True,
             )
-            sampled_sdf = sampled_sdf.view(-1, *ray_samples.frustums.directions.shape[:-1]).permute(1, 2, 0).contiguous()
+            sampled_sdf = (
+                sampled_sdf.view(-1, *ray_samples.frustums.directions.shape[:-1]).permute(1, 2, 0).contiguous()
+            )
         else:
             d_output = torch.ones_like(sdf, requires_grad=False, device=sdf.device)
             gradients = torch.autograd.grad(
@@ -590,7 +594,7 @@ class SDFField(Field):
         gradients = gradients.view(*ray_samples.frustums.directions.shape[:-1], -1)
         normals = F.normalize(gradients, p=2, dim=-1)
         points_norm = points_norm.view(*ray_samples.frustums.directions.shape[:-1], -1)
-        
+
         outputs.update(
             {
                 FieldHeadNames.RGB: rgb,
@@ -610,7 +614,7 @@ class SDFField(Field):
 
         return outputs
 
-    def forward(self, ray_samples: RaySamples, return_alphas: bool=False) -> Dict[FieldHeadNames, Tensor]:
+    def forward(self, ray_samples: RaySamples, return_alphas: bool = False) -> Dict[FieldHeadNames, Tensor]:
         """Evaluates the field at points along the ray.
 
         Args:

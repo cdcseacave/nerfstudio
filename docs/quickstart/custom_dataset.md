@@ -21,6 +21,7 @@ We Currently support the following custom data types:
 | 📱 [Record3D](record3d) | IOS with LiDAR | [Record3D app](https://record3d.app/) | 🐇 |
 | 🖥 [Metashape](metashape) | Any | [Metashape](https://www.agisoft.com/) | 🐇 |
 | 🖥 [RealityCapture](realitycapture) | Any | [RealityCapture](https://www.capturingreality.com/realitycapture) | 🐇 |
+| 🖥 [ODM](odm) | Any | [ODM](https://github.com/OpenDroneMap/ODM) | 🐇 |
 
 (images_and_video)=
 
@@ -46,6 +47,10 @@ ns-process-data {images, video} --data {DATA_PATH} --output-dir {PROCESSED_DATA_
 ns-train nerfacto --data {PROCESSED_DATA_DIR}
 ```
 
+### Training and evaluation on separate data
+
+For `ns-process-data {images, video}`, you can optionally use a separate image directory or video for training and evaluation, as suggested in [Nerfbusters](https://ethanweber.me/nerfbusters/). To do this, run `ns-process-data {images, video} --data {DATA_PATH} --eval-data {EVAL_DATA_PATH} --output-dir {PROCESSED_DATA_DIR}`. Then when running nerfacto, run `ns-train nerfacto --data {PROCESSED_DATA_DIR} nerfstudio-data --eval-mode filename`.
+
 ### Installing COLMAP
 
 There are many ways to install COLMAP, unfortunately it can sometimes be a bit finicky. If the following commands do not work, please refer to the [COLMAP installation guide](https://colmap.github.io/install.html) for additional installation methods. COLMAP install issues are common! Feel free to ask for help in on our [Discord](https://discord.gg/uMbNqcraFc).
@@ -53,10 +58,16 @@ There are many ways to install COLMAP, unfortunately it can sometimes be a bit f
 ::::::{tab-set}
 :::::{tab-item} Linux
 
-We recommend trying `apt`:
+We recommend trying `conda`:
 
 ```
-sudo apt install colmap
+conda install -c conda-forge colmap
+```
+
+Check that COLMAP 3.8 with CUDA is successfully installed:
+
+```
+colmap -h
 ```
 
 If that doesn't work, you can try VKPG:
@@ -304,6 +315,34 @@ ns-process-data realitycapture --data {data directory} --csv {csv file} --output
 ```
 
 4. Train with nerfstudio!
+
+```bash
+ns-train nerfacto --data {output directory}
+```
+
+(odm)=
+
+## ODM
+
+All images/videos must be captured with the same camera.
+
+1. Process a dataset using [ODM](https://github.com/OpenDroneMap/ODM#quickstart)
+
+```bash
+$ ls /path/to/dataset
+images
+odm_report
+odm_orthophoto
+...
+```
+
+2. Convert to nerfstudio format.
+
+```bash
+ns-process-data odm --data /path/to/dataset --output-dir {output directory}
+```
+
+4. Train!
 
 ```bash
 ns-train nerfacto --data {output directory}
