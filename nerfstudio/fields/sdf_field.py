@@ -285,7 +285,6 @@ class SDFField(Field):
 
             if self.config.weight_norm:
                 lin = nn.utils.weight_norm(lin)
-                # print("=======", lin.weight.shape)
             setattr(self, "glin" + str(l), lin)
 
         # laplace function for transform sdf to density from VolSDF
@@ -318,7 +317,6 @@ class SDFField(Field):
 
             if self.config.weight_norm:
                 lin = nn.utils.weight_norm(lin)
-            # print("=======", lin.weight.shape)
             setattr(self, "clin" + str(l), lin)
 
         self.softplus = nn.Softplus(beta=100)
@@ -339,13 +337,9 @@ class SDFField(Field):
     def forward_geonetwork(self, inputs):
         """forward the geonetwork"""
         if self.use_grid_feature:
-            # assert self.spatial_distortion is not None, "spatial distortion must be provided when using grid feature"
-            # if self.spatial_distortion is not None:
-            #     inputs = self.spatial_distortion(inputs)
             #TODO normalize inputs depending on the whether we model the background or not
             # map range [-2, 2] to [0, 1]
             positions = (inputs + 2.0) / 4.0
-            # positions = (inputs + 1.0) / 2.0
             feature = self.encoding(positions)
             # mask feature
             feature = feature * self.hash_encoding_mask.to(feature.device)
@@ -375,6 +369,8 @@ class SDFField(Field):
     def get_sdf(self, ray_samples: RaySamples) -> Float[Tensor, "num_samples ... 1"]:
         """predict the sdf value for ray samples"""
         positions = ray_samples.frustums.get_start_positions()
+        if self.spatial_distortion is not None:
+            positions = self.spatial_distortion(positions)
         positions_flat = positions.view(-1, 3)
         hidden_output = self.forward_geonetwork(positions_flat).view(*ray_samples.frustums.shape, -1)
         sdf, _ = torch.split(hidden_output, [1, self.config.geo_feat_dim], dim=-1)
@@ -424,15 +420,16 @@ class SDFField(Field):
             )[0]
         if not return_sdf:
             return gradients
-        else:
-            return gradients, points_sdf
+        return gradients, points_sdf
 
     def get_density(self, ray_samples: RaySamples):
         """Computes and returns the densities."""
         positions = ray_samples.frustums.get_start_positions()
+        if self.spatial_distortion is not None:
+            positions = self.spatial_distortion(positions)
         positions_flat = positions.view(-1, 3)
-        h = self.forward_geonetwork(positions_flat).view(*ray_samples.frustums.shape, -1)
-        sdf, geo_feature = torch.split(h, [1, self.config.geo_feat_dim], dim=-1)
+        hidden_output = self.forward_geonetwork(positions_flat).view(*ray_samples.frustums.shape, -1)
+        sdf, geo_feature = torch.split(hidden_output, [1, self.config.geo_feat_dim], dim=-1)
         density = self.laplace_density(sdf)
         return density, geo_feature
 
@@ -445,6 +442,8 @@ class SDFField(Field):
         """compute alpha from sdf as in NeuS"""
         if sdf is None or gradients is None:
             inputs = ray_samples.frustums.get_start_positions()
+            if self.spatial_distortion is not None:
+                inputs = self.spatial_distortion(inputs)
             inputs.requires_grad_(True)
             with torch.enable_grad():
                 hidden_output = self.forward_geonetwork(inputs)
@@ -559,8 +558,8 @@ class SDFField(Field):
         # compute gradient in constracted space
         inputs.requires_grad_(True)
         with torch.enable_grad():
-            h = self.forward_geonetwork(inputs)
-            sdf, geo_feature = torch.split(h, [1, self.config.geo_feat_dim], dim=-1)
+            hidden_output = self.forward_geonetwork(inputs)
+            sdf, geo_feature = torch.split(hidden_output, [1, self.config.geo_feat_dim], dim=-1)
 
         if self.config.use_numerical_gradients:
             gradients, sampled_sdf = self.gradient(

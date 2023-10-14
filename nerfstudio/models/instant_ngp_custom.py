@@ -7,7 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Tuple, Type
 
-import numpy as np
 import torch
 from torch.nn import Parameter
 from torchmetrics.functional import structural_similarity_index_measure
@@ -22,7 +21,6 @@ from nerfstudio.engine.callbacks import (
 )
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
-from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import NerfactoField
 from nerfstudio.model_components.losses import (
     MSELoss,
@@ -51,10 +49,6 @@ class InstantNGPCustomModelConfig(ModelConfig):
         default_factory=lambda: NGPCustomModel
     )  # We can't write `NGPModel` directly, because `NGPModel` doesn't exist yet
     """target class to instantiate"""
-    enable_collider: bool = False
-    """Whether to create a scene collider to filter rays."""
-    collider_params: Optional[Dict[str, float]] = None
-    """Instant NGP doesn't use a collider."""
     log2_hashmap_size: int = 19
     """Size of the hashmap for the base mlp"""
     near_plane: float = 0.05
