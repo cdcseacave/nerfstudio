@@ -57,6 +57,55 @@
 - [Learn more](#learn-more)
 - [Supported Features](#supported-features)
 
+# Maintaining this Private Repo
+- Create the private fork of the original public repo
+    1. Create a bare clone of the repo. (This is temporary and will be removed so just do it wherever.)
+    ```bash
+    git clone --bare https://github.com/nerfstudio-project/nerfstudio.git
+    ```
+    2. Create a new private repo on Github and name it nerfstudio
+    3. Mirror-push your bare clone to your new nerfstudio repo
+    ```bash
+    cd nerfstudio.git
+    git push --mirror git@github.com:PolyCam/nerfstudio.git
+    ```
+    4. Remove the temporary local repo from step 1
+    ```bash
+    cd ..
+    rm -rf nerfstudio.git
+    ```
+- Setup your local repo clone
+    1. Clone onto your machine
+    ```bash
+    git clone git@github.com:PolyCam/nerfstudio.git
+    ```
+    2. Setup the original public repo as remote to fetch (potential) future changes.
+    ```bash
+    cd nerfstudio
+    git remote add upstream https://github.com/nerfstudio-project/nerfstudio.git
+    ```
+    3. Disable push on the remote (as you are not allowed to push to it anyway).
+    ```bash
+    git remote set-url --push upstream DISABLE
+    ```
+    4. Check this was done correctly by listing all your remotes with `git remote -v`. You should see:
+    ```bash
+    origin  git@github.com:<your_username>/easytrace.git (fetch)
+    origin  git@github.com:<your_username>/easytrace.git (push)
+    upstream    git@github.com:usi-systems/easytrace.git (fetch)
+    upstream    DISABLE (push)
+    ```
+    5. Now you can pull changes from upstream:
+    ```bash
+    git fetch <upstream_branch>
+    git checkout <upstream_branch>
+    git pull
+    git checkout <local_branch>
+    git merge <upstream_branch>
+    git push origin <local_branch>
+    ```
+- These instructions were summarized from here: https://gist.github.com/0xjac/85097472043b697ab57ba1b1c7530274
+
 # About
 
 _It’s as simple as plug and play with nerfstudio!_
