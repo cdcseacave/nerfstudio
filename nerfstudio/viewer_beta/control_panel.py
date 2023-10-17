@@ -270,7 +270,8 @@ class ControlPanel:
         Args:
             step: the train step to set the model to
         """
-        self.markdown.content = f"Step: {step}"
+        with self.viser_server.atomic(), self.stat_folder:
+            self.markdown.content = f"Step: {step}"
 
     def update_output_options(self, new_options: List[str]):
         """
