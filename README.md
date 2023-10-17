@@ -90,14 +90,14 @@
     ```
     4. Check this was done correctly by listing all your remotes with `git remote -v`. You should see:
     ```bash
-    origin  git@github.com:<your_username>/easytrace.git (fetch)
-    origin  git@github.com:<your_username>/easytrace.git (push)
-    upstream    git@github.com:usi-systems/easytrace.git (fetch)
+    origin  git@github.com:PolyCam/nerfstudio.git (fetch)
+    origin  git@github.com:PolyCam/nerfstudio.git (push)
+    upstream    https://github.com/nerfstudio-project/nerfstudio.git (fetch)
     upstream    DISABLE (push)
     ```
     5. Now you can pull changes from upstream:
     ```bash
-    git fetch <upstream_branch>
+    git fetch
     git checkout <upstream_branch>
     git pull
     git checkout <local_branch>
