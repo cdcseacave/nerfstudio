@@ -36,8 +36,6 @@ from nerfstudio.process_data.colmap_utils import parse_colmap_camera_params
 from nerfstudio.utils.scripts import run_command
 from nerfstudio.utils.rich_utils import CONSOLE, status
 
-MAX_AUTO_RESOLUTION = 1600
-
 
 @dataclass
 class ColmapDataParserConfig(DataParserConfig):
@@ -462,10 +460,6 @@ class ColmapDataParser(DataParser):
                 h, w = test_img.size
                 max_res = max(h, w)
                 df = 0
-                while True:
-                    if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
-                        break
-                    df += 1
 
                 self._downscale_factor = 2**df
                 CONSOLE.log(f"Using image downscale factor of {self._downscale_factor}")
