@@ -114,7 +114,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     """weight of ssim loss"""
     stop_split_at: int = 25000
     """stop splitting at this step"""
-    sh_degree: int = 4
+    sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
 
 
