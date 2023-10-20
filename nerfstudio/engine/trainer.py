@@ -271,8 +271,7 @@ class Trainer:
 
                 # If gaussian_splat -> record number of gaussians
                 if isinstance(self.pipeline.model, GaussianSplattingModel):
-                    num_gaussians = len(self.pipeline.model.means.cpu().detach().numpy())
-                    writer.put_scalar(name=EventName.GAUSSIAN_NUM, scalar=num_gaussians, step=step)
+                    writer.put_scalar(name=EventName.GAUSSIAN_NUM, scalar=self.pipeline.model.num_points, step=step)
 
                 self._update_viewer_state(step)
 
