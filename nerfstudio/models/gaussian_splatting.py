@@ -112,7 +112,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     """whether to initialize the positions uniformly randomly (not SFM points)"""
     ssim_lambda: float = 0.2
     """weight of ssim loss"""
-    stop_split_at: int = 25000
+    stop_split_at: int = 12000
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
