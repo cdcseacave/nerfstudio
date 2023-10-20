@@ -506,7 +506,11 @@ class ExportGaussianSplat(Exporter):
         pcd.point.f_dc_0 = colors[:, 0, 0].reshape(points_shape)
         pcd.point.f_dc_1 = colors[:, 1, 0].reshape(points_shape)
         pcd.point.f_dc_2 = colors[:, 2, 0].reshape(points_shape)
-        # pcd.point.f_rest_0 = colors[:, 3].reshape(points_shape)
+        sh_count = colors.shape[2] - 1
+        for c in range(3):
+            for i in range(sh_count):
+                setattr(pcd.point, f'f_rest_{c * sh_count + i}',
+                        colors[:, c, i + 1].reshape(points_shape))
 
         pcd.point.scale_0 = scales[:, 0].reshape(points_shape)
         pcd.point.scale_1 = scales[:, 1].reshape(points_shape)
