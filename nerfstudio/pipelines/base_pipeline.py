@@ -27,18 +27,13 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Type, Uni
 import torch
 import torch.distributed as dist
 from PIL import Image
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-)
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from torch import nn
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn import Parameter
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.cuda.amp.grad_scaler import GradScaler
 
+from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datamanagers.base_datamanager import (
     DataManager,
@@ -264,6 +259,12 @@ class VanillaPipeline(Pipeline):
         self.datamanager: DataManager = config.datamanager.setup(
             device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank
         )
+        # TODO make cleaner
+        seed_pts = None
+        if hasattr(self.datamanager, "train_dataparser_outputs") and 'points3D_xyz' in self.datamanager.train_dataparser_outputs.metadata:
+            pts = self.datamanager.train_dataparser_outputs.metadata["points3D_xyz"]
+            pts_rgb = self.datamanager.train_dataparser_outputs.metadata["points3D_rgb"]
+            seed_pts = (pts,pts_rgb)
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
@@ -274,6 +275,7 @@ class VanillaPipeline(Pipeline):
             metadata=self.datamanager.train_dataset.metadata,
             device=device,
             grad_scaler=grad_scaler,
+            seed_points=seed_pts,
         )
         self.model.to(device)
 
@@ -341,7 +343,12 @@ class VanillaPipeline(Pipeline):
         assert "image_idx" not in metrics_dict
         metrics_dict["image_idx"] = image_idx
         assert "num_rays" not in metrics_dict
-        metrics_dict["num_rays"] = len(camera_ray_bundle)
+        if type(camera_ray_bundle) is Cameras:
+            metrics_dict["num_rays"] = (
+                camera_ray_bundle.height * camera_ray_bundle.width * camera_ray_bundle.size
+            ).item()
+        else:
+            metrics_dict["num_rays"] = len(camera_ray_bundle)
         self.train()
         return metrics_dict, images_dict
 
