@@ -293,7 +293,7 @@ class Trainer:
                 if self.pipeline.datamanager.eval_dataset:
                     self.eval_iteration(step)
 
-                if step_check(step, self.config.steps_per_save):
+                if step_check(step + 1, self.config.steps_per_save):
                     self.save_checkpoint(step)
 
                 writer.write_out_storage()
