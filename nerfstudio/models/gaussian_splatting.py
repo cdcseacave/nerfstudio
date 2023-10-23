@@ -116,6 +116,10 @@ class GaussianSplattingModelConfig(ModelConfig):
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
+    sphere_loss_size: float = 50.0
+    """pull points outward: 1 corresponds to a sphere with radius equal to the average camera distance from the center"""
+    sphere_loss_lambda: float = 0.05
+    """pull points outward: add term to loss function that has a range [0-1] -> multiply by this number"""
 
 
 class GaussianSplattingModel(Model):
@@ -171,6 +175,11 @@ class GaussianSplattingModel(Model):
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
         self.back_color = torch.zeros(3)
+
+        # use camera positions to init sphere center & size
+        self.cameras_loaded = False
+        self.cameras = []
+        self.cnt = 0
 
     @property
     def get_colors(self):
@@ -458,7 +467,17 @@ class GaussianSplattingModel(Model):
 
     def _get_downscale_factor(self):
         return 2 ** max((self.config.num_downscales - self.step // self.config.resolution_schedule), 0)
-
+    
+    def get_camera_poses_info(self):
+        self.cameras_origin = torch.zeros((1,3)).to(self.device)
+        for cam in self.cameras:
+            self.cameras_origin += cam.camera_to_worlds[..., :3, 3:4].resize(1,3)  # 1 x 3 x 1
+        self.cameras_origin /= len(self.cameras)
+        self.cameras_ave_dist_origin = torch.zeros((1)).to(self.device)
+        for cam in self.cameras:
+            self.cameras_ave_dist_origin += (self.cameras_origin - cam.camera_to_worlds[..., :3, 3:4].resize(1,3)).norm()
+        self.cameras_ave_dist_origin /= len(self.cameras)
+        
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
 
@@ -473,6 +492,20 @@ class GaussianSplattingModel(Model):
             print("Called get_outputs with not a camera")
             return {}
         assert camera.shape[0] == 1, "Only one camera at a time"
+        # record the camera info for later
+        if not self.cameras_loaded:
+            add_cam = True
+            for cam in self.cameras:
+                cam_diff = np.linalg.norm((cam.camera_to_worlds - camera.camera_to_worlds).cpu().squeeze().numpy())
+                if cam_diff < 1e-6:
+                    add_cam = False
+                    break
+            if add_cam:
+                self.cameras.insert(1, camera)
+            self.cameras_loaded = self.cnt > 3 * len(self.cameras)
+            if self.cameras_loaded:
+                self.get_camera_poses_info()
+            self.cnt += 1
         # dont mutate the input
         camera = deepcopy(camera)
         if self.training:
@@ -571,7 +604,7 @@ class GaussianSplattingModel(Model):
             W,
             torch.ones(3, device=self.device) * 10,
         )[..., 0:1]
-        return {"rgb": rgb, "depth": depth_im}
+        return {"rgb": rgb, "depth": depth_im, "means_rendered": self.means[rend_mask]} # means_rendered: world coords
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
@@ -582,6 +615,10 @@ class GaussianSplattingModel(Model):
         """
 
         return {}
+    
+    def get_sphere_loss(self, means) -> torch.Tensor:
+        sphere_radius = self.config.sphere_loss_size * self.cameras_ave_dist_origin
+        return torch.abs(torch.linalg.vector_norm(means - self.cameras_origin, dim=1) - sphere_radius).mean() / sphere_radius
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
@@ -602,7 +639,11 @@ class GaussianSplattingModel(Model):
             gt_img = batch["image"]
         Ll1 = torch.abs(gt_img - outputs["rgb"]).mean()
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], outputs["rgb"].permute(2, 0, 1)[None, ...])
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss}
+        if self.config.sphere_loss_lambda > 0 and self.cameras_loaded:
+            outer_sphere_L1 = self.get_sphere_loss(outputs["means_rendered"])
+        else:
+            outer_sphere_L1 = 0.0
+        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + outer_sphere_L1 * self.config.sphere_loss_lambda}
 
     @torch.no_grad()
     def get_outputs_for_camera_ray_bundle(
