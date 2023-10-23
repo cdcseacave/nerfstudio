@@ -119,7 +119,9 @@ class GaussianSplattingModelConfig(ModelConfig):
     sphere_loss_size: float = 50.0
     """pull points outward: 1 corresponds to a sphere with radius equal to the average camera distance from the center"""
     sphere_loss_lambda: float = 0.05
-    """pull points outward: add term to loss function that has a range [0-1] -> multiply by this number"""
+    """pull points outward: add L1 term to loss function that has a range [0-1] -> multiply by this number"""
+    regularize_sh: float = 0.1
+    """sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number"""
 
 
 class GaussianSplattingModel(Model):
@@ -578,6 +580,7 @@ class GaussianSplattingModel(Model):
             rgbs = SphericalHarmonics.apply(n, viewdirs, coeffs)
             rgbs = torch.clamp(rgbs + 0.5, 0.0, 1.0)
         else:
+            coeffs = []
             rgbs = self.get_colors.squeeze()[rend_mask]  # (N, 3)
             rgbs = torch.sigmoid(rgbs)
         rgb = RasterizeGaussians.apply(
@@ -604,7 +607,7 @@ class GaussianSplattingModel(Model):
             W,
             torch.ones(3, device=self.device) * 10,
         )[..., 0:1]
-        return {"rgb": rgb, "depth": depth_im, "means_rendered": self.means[rend_mask]} # means_rendered: world coords
+        return {"rgb": rgb, "depth": depth_im, "means_rendered": self.means[rend_mask], "sh": coeffs} # means_rendered: world coords
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
@@ -643,7 +646,15 @@ class GaussianSplattingModel(Model):
             outer_sphere_L1 = self.get_sphere_loss(outputs["means_rendered"])
         else:
             outer_sphere_L1 = 0.0
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + outer_sphere_L1 * self.config.sphere_loss_lambda}
+        if self.config.sh_degree > 0:
+            sh_coeffs = outputs["sh"]
+            if sh_coeffs.size()[1] > 1:
+                sh_L2 = torch.linalg.vector_norm(sh_coeffs[:, 1:, :], dim=None)
+            else:
+                sh_L2 = 0.0
+        else:
+            sh_L2 = 0.0
+        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + outer_sphere_L1 * self.config.sphere_loss_lambda + sh_L2 * self.config.regularize_sh}
 
     @torch.no_grad()
     def get_outputs_for_camera_ray_bundle(
