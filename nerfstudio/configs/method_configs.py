@@ -604,7 +604,7 @@ method_configs["gaussian-splatting"] = TrainerConfig(
     steps_per_eval_batch=10,
     steps_per_save=2000,
     steps_per_eval_all_images=1000000,  # set to a very large model so we don't eval with all images
-    max_num_iterations=10000,
+    max_num_iterations=15000,
     mixed_precision=False,
     gradient_accumulation_steps=1,
     pipeline=VanillaPipelineConfig(
@@ -625,14 +625,14 @@ method_configs["gaussian-splatting"] = TrainerConfig(
             "optimizer": AdamOptimizerConfig(lr=2.5e-3, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(
                 lr_final=1e-3,
-                max_steps=10000,
+                max_steps=15000,
             ),
         },
         "shs": {
             "optimizer": AdamOptimizerConfig(lr=2.5e-3 / 20, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(
                 lr_final=1e-3 / 20,
-                max_steps=10000,
+                max_steps=15000,
             ),
         },
         "opacity": {

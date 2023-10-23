@@ -36,8 +36,6 @@ from nerfstudio.process_data.colmap_utils import parse_colmap_camera_params
 from nerfstudio.utils.scripts import run_command
 from nerfstudio.utils.rich_utils import CONSOLE, status
 
-MAX_AUTO_RESOLUTION = 1600
-
 
 @dataclass
 class ColmapDataParserConfig(DataParserConfig):
@@ -59,7 +57,7 @@ class ColmapDataParserConfig(DataParserConfig):
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
-    train_split_fraction: float = 0.9
+    train_split_fraction: float = 1.0
     """The fraction of images to use for training. The remaining images are for eval."""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
@@ -70,7 +68,7 @@ class ColmapDataParserConfig(DataParserConfig):
     """Path to masks directory. If not set, masks are not loaded."""
     depths_path: Optional[Path] = None
     """Path to depth maps directory. If not set, depths are not loaded."""
-    colmap_path: Path = Path("colmap/sparse/0")
+    colmap_path: Path = Path("sparse/0")
     """Path to the colmap reconstruction directory relative to the data path."""
     load_3D_points: bool = False
     """Whether to load the 3D points from the colmap reconstruction."""
@@ -462,10 +460,6 @@ class ColmapDataParser(DataParser):
                 h, w = test_img.size
                 max_res = max(h, w)
                 df = 0
-                while True:
-                    if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
-                        break
-                    df += 1
 
                 self._downscale_factor = 2**df
                 CONSOLE.log(f"Using image downscale factor of {self._downscale_factor}")

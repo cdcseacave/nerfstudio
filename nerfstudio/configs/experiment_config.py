@@ -41,6 +41,8 @@ class ExperimentConfig(InstantiateConfig):
     """Full config contents for running an experiment. Any experiment types (like training) will be
     subclassed from this, and must have their _target field defined accordingly."""
 
+    output_to_data_dir: bool = False
+    """If true, save outputs to the input directory instead of a separate directory"""
     output_dir: Path = Path("outputs")
     """relative or absolute output directory to save all checkpoints and logging"""
     method_name: Optional[str] = None
@@ -120,6 +122,8 @@ class ExperimentConfig(InstantiateConfig):
         # check the experiment and method names
         assert self.method_name is not None, "Please set method name in config or via the cli"
         self.set_experiment_name()
+        if self.output_to_data_dir:
+            return Path(self.pipeline.datamanager.data)
         return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
 
     def get_checkpoint_dir(self) -> Path:
