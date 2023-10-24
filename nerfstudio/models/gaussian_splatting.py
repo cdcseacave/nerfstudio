@@ -88,6 +88,8 @@ class GaussianSplattingModelConfig(ModelConfig):
     _target: Type = field(default_factory=lambda: GaussianSplattingModel)
     max_iterations: int = 15000
     """Sets the defaults in method_configs.py"""
+    max_gaussians: int = 5,000,000
+    """Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification"""
     warmup_length: int = 1000
     """period of steps where refinement is turned off"""
     refine_every: int = 100
@@ -104,6 +106,10 @@ class GaussianSplattingModelConfig(ModelConfig):
     """Every this many refinement steps, reset the alpha"""
     densify_grad_thresh: float = 0.0002
     """threshold of positional gradient norm for densifying gaussians"""
+    densify_grad_thresh_init: float = densify_grad_thresh
+    """See densify_grad_threshold_start_increase"""
+    densify_grad_threshold_final: float = 10.0 * densify_grad_thresh
+    """See densify_grad_threshold_start_increase"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
     sh_degree_interval: int = 500
@@ -116,6 +122,10 @@ class GaussianSplattingModelConfig(ModelConfig):
     """weight of ssim loss"""
     stop_refine_at: int = 0.8 * max_iterations
     """stop splitting & culling at this step"""
+    refine_until_iter_start_increase: int = 0.5 * max_iterations
+    """After this many iterations, make it harder to densify (value should be lower than densify_until_iter)"""
+    refine_grad_threshold_start_increase: float = 0.7
+    """[0-1] Start increasing densify_grad_threshold from init -> final once there are densify_grad_threshold_start_increase * max_num_splats of splats"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sphere_loss_size: float = 50.0
@@ -193,7 +203,7 @@ class GaussianSplattingModel(Model):
 
     def load_state_dict(self, dict, **kwargs):
         # resize the parameters to match the new number of points
-        self.step = 30000
+        self.step = self.config.max_iterations
         newp = dict["means"].shape[0]
         self.means = torch.nn.Parameter(torch.zeros(newp, 3, device=self.device))
         self.scales = torch.nn.Parameter(torch.zeros(newp, 3, device=self.device))
@@ -291,73 +301,88 @@ class GaussianSplattingModel(Model):
 
     def refinement_after(self, optimizers: Optimizers, step):
         if self.step > self.config.warmup_length and self.step < self.config.stop_refine_at:
-            with torch.no_grad():
-                # then we densify
-                avg_grad_norm = (
-                    (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
-                )
-                high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
-                splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
-                splits &= high_grads
-                nsamps = 2
-                (
-                    split_means,
-                    split_colors,
-                    split_shs,
-                    split_opacities,
-                    split_scales,
-                    split_quats,
-                ) = self.split_gaussians(splits, nsamps)
+            n_gaussians = self.means.size()[0]
+            if n_gaussians < self.config.max_gaussians:
+                # Set densify_grad_thresh between densify_grad_thresh_init & densify_grad_threshold_final
+                ratio = 0 # [0-1] where 0 -> densify_grad_thresh_init and 1 -> densify_grad_threshold_final
+                num_splats_start_increase = self.config.max_num_splats * self.config.densify_grad_threshold_start_increase
+                if n_gaussians > num_splats_start_increase:
+                    ratio1 = (n_gaussians - num_splats_start_increase) / (self.config.max_num_splats - num_splats_start_increase)
+                    if ratio1 > ratio and ratio1 <= 1:
+                        ratio = ratio1
+                if self.step > self.config.densify_until_iter_start_increase:
+                    ratio2 = (self.step - self.config.densify_until_iter_start_increase) / (self.config.densify_until_iter - self.config.densify_until_iter_start_increase)
+                    if ratio2 > ratio and ratio2 <= 1:
+                        ratio = ratio2
+                const = math.log(self.config.densify_grad_threshold_final / self.config.densify_grad_thresh_init)
+                self.config.densify_grad_thresh = self.config.densify_grad_thresh_init * math.exp(const * ratio)
+                with torch.no_grad():
+                    # then we densify
+                    avg_grad_norm = (
+                        (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
+                    )
+                    high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
+                    splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
+                    splits &= high_grads
+                    nsamps = 2
+                    (
+                        split_means,
+                        split_colors,
+                        split_shs,
+                        split_opacities,
+                        split_scales,
+                        split_quats,
+                    ) = self.split_gaussians(splits, nsamps)
 
-                dups = (self.scales.exp().max(dim=-1).values <= self.config.densify_size_thresh).squeeze()
-                dups &= high_grads
-                dup_means, dup_colors, dup_shs, dup_opacities, dup_scales, dup_quats = self.dup_gaussians(dups)
-                self.means = Parameter(torch.cat([self.means.detach(), split_means, dup_means], dim=0))
-                self.colors = Parameter(torch.cat([self.colors.detach(), split_colors, dup_colors], dim=0))
-                self.shs_rest = Parameter(torch.cat([self.shs_rest.detach(), split_shs, dup_shs], dim=0))
-                self.opacities = Parameter(
-                    torch.cat([self.opacities.detach(), split_opacities, dup_opacities], dim=0)
-                )
-                self.scales = Parameter(torch.cat([self.scales.detach(), split_scales, dup_scales], dim=0))
-                self.quats = Parameter(torch.cat([self.quats.detach(), split_quats, dup_quats], dim=0))
-                # append zeros to the max_2Dsize tensor
-                self.max_2Dsize = torch.cat(
-                    [self.max_2Dsize, torch.zeros_like(split_scales[:, 0]), torch.zeros_like(dup_scales[:, 0])],
-                    dim=0,
-                )
-                split_idcs = torch.where(splits)[0]
-                param_groups = self.get_param_groups()
-                for group, param in param_groups.items():
-                    self.dup_in_optim(optimizers.optimizers[group], split_idcs, param, n=nsamps)
-                dup_idcs = torch.where(dups)[0]
-
-                param_groups = self.get_param_groups()
-                for group, param in param_groups.items():
-                    self.dup_in_optim(optimizers.optimizers[group], dup_idcs, param, 1)
-
-                # only cull if we've seen every image since opacity reset
-                reset_interval = self.config.reset_alpha_every * self.config.refine_every
-                if self.step % reset_interval > self.num_train_data:
-                    # then cull
-                    deleted_mask = self.cull_gaussians()
+                    dups = (self.scales.exp().max(dim=-1).values <= self.config.densify_size_thresh).squeeze()
+                    dups &= high_grads
+                    dup_means, dup_colors, dup_shs, dup_opacities, dup_scales, dup_quats = self.dup_gaussians(dups)
+                    self.means = Parameter(torch.cat([self.means.detach(), split_means, dup_means], dim=0))
+                    self.colors = Parameter(torch.cat([self.colors.detach(), split_colors, dup_colors], dim=0))
+                    self.shs_rest = Parameter(torch.cat([self.shs_rest.detach(), split_shs, dup_shs], dim=0))
+                    self.opacities = Parameter(
+                        torch.cat([self.opacities.detach(), split_opacities, dup_opacities], dim=0)
+                    )
+                    self.scales = Parameter(torch.cat([self.scales.detach(), split_scales, dup_scales], dim=0))
+                    self.quats = Parameter(torch.cat([self.quats.detach(), split_quats, dup_quats], dim=0))
+                    # append zeros to the max_2Dsize tensor
+                    self.max_2Dsize = torch.cat(
+                        [self.max_2Dsize, torch.zeros_like(split_scales[:, 0]), torch.zeros_like(dup_scales[:, 0])],
+                        dim=0,
+                    )
+                    split_idcs = torch.where(splits)[0]
                     param_groups = self.get_param_groups()
                     for group, param in param_groups.items():
-                        self.remove_from_optim(optimizers.optimizers[group], deleted_mask, param)
+                        self.dup_in_optim(optimizers.optimizers[group], split_idcs, param, n=nsamps)
+                    dup_idcs = torch.where(dups)[0]
 
-                if self.step // self.config.refine_every % self.config.reset_alpha_every == 0:
-                    reset_value = 0.01
-                    self.opacities.data = torch.full_like(
-                        self.opacities.data, torch.logit(torch.tensor(reset_value)).item()
-                    )
-                    # reset the exp of optimizer
-                    optim = optimizers.optimizers["opacity"]
-                    param = optim.param_groups[0]["params"][0]
-                    param_state = optim.state[param]
-                    param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
-                    param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
-                self.xys_grad_norm = None
-                self.vis_counts = None
-                self.max_2Dsize = None
+                    param_groups = self.get_param_groups()
+                    for group, param in param_groups.items():
+                        self.dup_in_optim(optimizers.optimizers[group], dup_idcs, param, 1)
+
+                    # only cull if we've seen every image since opacity reset
+                    reset_interval = self.config.reset_alpha_every * self.config.refine_every
+                    if self.step % reset_interval > self.num_train_data:
+                        # then cull
+                        deleted_mask = self.cull_gaussians()
+                        param_groups = self.get_param_groups()
+                        for group, param in param_groups.items():
+                            self.remove_from_optim(optimizers.optimizers[group], deleted_mask, param)
+
+                    if self.step // self.config.refine_every % self.config.reset_alpha_every == 0:
+                        reset_value = 0.01
+                        self.opacities.data = torch.full_like(
+                            self.opacities.data, torch.logit(torch.tensor(reset_value)).item()
+                        )
+                        # reset the exp of optimizer
+                        optim = optimizers.optimizers["opacity"]
+                        param = optim.param_groups[0]["params"][0]
+                        param_state = optim.state[param]
+                        param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+                        param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+                    self.xys_grad_norm = None
+                    self.vis_counts = None
+                    self.max_2Dsize = None
 
     def cull_gaussians(self):
         """
