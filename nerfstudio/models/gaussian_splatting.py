@@ -88,7 +88,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     _target: Type = field(default_factory=lambda: GaussianSplattingModel)
     max_iterations: int = 15000
     """Sets the defaults in method_configs.py"""
-    max_gaussians: int = 5,000,000
+    max_gaussians: int = 5000000
     """Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification"""
     warmup_length: int = 1000
     """period of steps where refinement is turned off"""
@@ -122,17 +122,17 @@ class GaussianSplattingModelConfig(ModelConfig):
     """weight of ssim loss"""
     stop_refine_at: int = 0.8 * max_iterations
     """stop splitting & culling at this step"""
-    refine_until_iter_start_increase: int = 0.5 * max_iterations
+    densify_until_iter_start_increase: int = 0.5 * max_iterations
     """After this many iterations, make it harder to densify (value should be lower than densify_until_iter)"""
-    refine_grad_threshold_start_increase: float = 0.7
+    densify_grad_threshold_start_increase: float = 0.7
     """[0-1] Start increasing densify_grad_threshold from init -> final once there are densify_grad_threshold_start_increase * max_num_splats of splats"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sphere_loss_size: float = 50.0
     """pull points outward: 1 corresponds to a sphere with radius equal to the average camera distance from the center"""
-    sphere_loss_lambda: float = 0.05
+    sphere_loss_lambda: float = 0.0
     """pull points outward: add L1 term to loss function that has a range [0-1] -> multiply by this number"""
-    regularize_sh: float = 0.0
+    regularize_sh_lambda: float = 0.0
     """sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number"""
 
 
@@ -305,13 +305,13 @@ class GaussianSplattingModel(Model):
             if n_gaussians < self.config.max_gaussians:
                 # Set densify_grad_thresh between densify_grad_thresh_init & densify_grad_threshold_final
                 ratio = 0 # [0-1] where 0 -> densify_grad_thresh_init and 1 -> densify_grad_threshold_final
-                num_splats_start_increase = self.config.max_num_splats * self.config.densify_grad_threshold_start_increase
+                num_splats_start_increase = self.config.max_gaussians * self.config.densify_grad_threshold_start_increase
                 if n_gaussians > num_splats_start_increase:
-                    ratio1 = (n_gaussians - num_splats_start_increase) / (self.config.max_num_splats - num_splats_start_increase)
+                    ratio1 = (n_gaussians - num_splats_start_increase) / (self.config.max_gaussians - num_splats_start_increase)
                     if ratio1 > ratio and ratio1 <= 1:
                         ratio = ratio1
                 if self.step > self.config.densify_until_iter_start_increase:
-                    ratio2 = (self.step - self.config.densify_until_iter_start_increase) / (self.config.densify_until_iter - self.config.densify_until_iter_start_increase)
+                    ratio2 = (self.step - self.config.densify_until_iter_start_increase) / (self.config.stop_refine_at - self.config.densify_until_iter_start_increase)
                     if ratio2 > ratio and ratio2 <= 1:
                         ratio = ratio2
                 const = math.log(self.config.densify_grad_threshold_final / self.config.densify_grad_thresh_init)
@@ -668,11 +668,11 @@ class GaussianSplattingModel(Model):
             gt_img = batch["image"]
         Ll1 = torch.abs(gt_img - outputs["rgb"]).mean()
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], outputs["rgb"].permute(2, 0, 1)[None, ...])
-        if self.config.sphere_loss_lambda > 0 and self.cameras_loaded:
+        if self.config.sphere_loss_lambda > 0.0 and self.cameras_loaded:
             outer_sphere_L1 = self.get_sphere_loss(outputs["means_rendered"])
         else:
             outer_sphere_L1 = 0.0
-        if self.config.sh_degree > 0:
+        if self.config.sh_degree > 0 and self.config.regularize_sh_lambda > 0.0:
             sh_coeffs = outputs["sh"]
             n = sh_coeffs.size()[0]
             assert n == outputs["means_rendered"].size()[0]
@@ -682,7 +682,7 @@ class GaussianSplattingModel(Model):
                 sh_L2 = 0.0
         else:
             sh_L2 = 0.0
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + outer_sphere_L1 * self.config.sphere_loss_lambda + sh_L2 * self.config.regularize_sh}
+        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + outer_sphere_L1 * self.config.sphere_loss_lambda + sh_L2 * self.config.regularize_sh_lambda}
 
     @torch.no_grad()
     def get_outputs_for_camera_ray_bundle(
