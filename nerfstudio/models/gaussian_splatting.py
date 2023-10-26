@@ -565,6 +565,10 @@ class GaussianSplattingModel(Model):
             if add_cam:
                 self.cameras.insert(1, camera)
             self.cameras_loaded = self.step > 2 * self.num_train_data # Sometimes self.num_train_data is not accurate
+            if self.cameras_loaded:
+                print("Cameras loaded: " + str(len(self.cameras)) + " cameras, self.num_train_data = " + str(self.num_train_data))
+                for i in range(10): # Hack to make prior print line visible
+                    print("\n")
         # dont mutate the input
         camera = deepcopy(camera)
         if self.training:
