@@ -90,7 +90,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     max_iterations: int = 15000
     """Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead"""
     max_gaussians: int = 5000000
-    """Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification"""
+    """Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification. It's possible for n_gaussians to go over this number by a bit, but is unlikely"""
     warmup_length: int = 1000
     """period of steps where refinement is turned off"""
     refine_every: int = 100
@@ -101,7 +101,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     """at the beginning, resolution is 1/2^d, where d is this number"""
     cull_alpha_thresh: float = 0.01
     """threshold of opacity for culling gaussians"""
-    cull_scale_thresh: float = 50.0
+    cull_scale_thresh: float = 0.5
     """threshold of scale for culling gaussians"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
