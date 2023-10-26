@@ -637,7 +637,7 @@ method_configs["gaussian-splatting"] = TrainerConfig(
         },
         "opacity": {
             "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
-            "scheduler": None,
+            "scheduler": None, # Don't decrease learning rate because culling gaussians based on alpha recovery after setting all values low will cull more as lr decreases
         },
         "scaling": {
             "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
