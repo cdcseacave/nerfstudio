@@ -122,7 +122,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     ssim_lambda: float = 0.2
     """weight of ssim loss"""
     stop_refine_at: int = 0.7 * max_iterations
-    """stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_cameras_viewed won't work"""
+    """stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work"""
     densify_until_iter_start_increase: int = 0.5 * max_iterations
     """After this many iterations, make it harder to densify (value should be lower than densify_until_iter)"""
     densify_grad_threshold_start_increase: float = 0.7
@@ -145,8 +145,8 @@ class GaussianSplattingModelConfig(ModelConfig):
     """Initialize gaussians at a sphere with this as the minimum radius"""
     init_pts_sphere_rad_max: float = 20.0
     """Initialize gaussians at a sphere with this as the maximum radius"""
-    remove_gaussians_cameras_viewed: int = 2
-    """At the end of training, remove gaussians that are seen by less than this many cameras. Set to 0 to disable"""
+    remove_gaussians_min_cameras_in_fov: int = 2
+    """At the end of training, only retain gaussians if they are in the field of view of at least this many cameras. Set to 0 to disable"""
 
 
 class GaussianSplattingModel(Model):
@@ -221,6 +221,9 @@ class GaussianSplattingModel(Model):
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
         self.back_color = torch.ones(3)
+        # record camera positions
+        self.cameras_loaded = False
+        self.cameras = []
 
     @property
     def get_colors(self):
@@ -411,8 +414,8 @@ class GaussianSplattingModel(Model):
 
     def refinement_last(self, optimizers: Optimizers, step):
         # At the end of training, remove gaussians that are only seen by 1 camera
-        if self.config.remove_gaussians_cameras_viewed > 0 and self.step == self.config.max_iterations - 1:
-            delete_mask = (self.gaussians_camera_cnt < self.config.remove_gaussians_cameras_viewed).squeeze()
+        if self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step == self.config.max_iterations - 1:
+            delete_mask = (self.gaussians_camera_cnt < self.config.remove_gaussians_min_cameras_in_fov).squeeze()
             self.cull_gaussians(optimizers, delete_mask)
     
     def get_cull_gaussians(self):
@@ -551,6 +554,17 @@ class GaussianSplattingModel(Model):
             print("Called get_outputs with not a camera")
             return {}
         assert camera.shape[0] == 1, "Only one camera at a time"
+        # record the camera info for later
+        if not self.cameras_loaded:
+            add_cam = True
+            for cam in self.cameras:
+                cam_diff = np.linalg.norm((cam.camera_to_worlds - camera.camera_to_worlds).cpu().squeeze().numpy())
+                if cam_diff < 1e-6:
+                    add_cam = False
+                    break
+            if add_cam:
+                self.cameras.insert(1, camera)
+            self.cameras_loaded = self.step > 2 * self.num_train_data # Sometimes self.num_train_data is not accurate
         # dont mutate the input
         camera = deepcopy(camera)
         if self.training:
@@ -654,8 +668,8 @@ class GaussianSplattingModel(Model):
             torch.ones(3, device=self.device) * 10,
         )[..., 0:1]
         # At the end of training, remove gaussians that are only seen by 1 camera -> keep track of count
-        if self.training and self.config.remove_gaussians_cameras_viewed > 0 and self.step >= self.config.max_iterations - self.num_train_data:
-            if self.step == self.config.max_iterations - self.num_train_data:
+        if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= self.config.max_iterations - len(self.cameras):
+            if self.step == self.config.max_iterations - len(self.cameras):
                 self.gaussians_camera_cnt = torch.nn.Parameter(torch.zeros(self.num_points, 1, device=self.device))
             assert self.num_points == len(self.gaussians_camera_cnt)
             with torch.no_grad():
