@@ -135,10 +135,14 @@ class GaussianSplattingModelConfig(ModelConfig):
     """pull points away from camera: add L1 term to loss function that has a range [0-1] -> multiply by this number"""
     regularize_sh_lambda: float = 0.01
     """sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number"""
-    init_pts_sphere_rad: float = 15.0
-    """Initialize gaussians at a sphere of this dimension"""
     init_pts_sphere_num: int = 20000
-    """Initialize gaussians at a sphere with this many randomly placed points"""
+    """Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable"""
+    init_pts_sphere_rad_pct: float = 0.99
+    """Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin"""
+    init_pts_sphere_rad_mult: float = 1.5
+    """Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value"""
+    init_pts_sphere_rad_max: float = 20.0
+    """Initialize gaussians at a sphere with this as the maximum radius"""
 
 
 class GaussianSplattingModel(Model):
@@ -157,13 +161,21 @@ class GaussianSplattingModel(Model):
             self.seed_pts = None
         super().__init__(*args, **kwargs)
 
+    def get_init_sphere_radius(self) -> float:
+        dists = torch.linalg.vector_norm(self.means, dim=1).detach().numpy()
+        dist_pct = np.percentile(dists, self.config.init_pts_sphere_rad_pct*100, overwrite_input=False)
+        dist_raw = dist_pct * self.config.init_pts_sphere_rad_mult
+        rad = min(dist_raw, self.config.init_pts_sphere_rad_max)
+        print("Initializing " + str(self.config.init_pts_sphere_num) + " 3D gaussians at radius = " + str(rad))
+        return rad
+
     def populate_modules(self):
         if self.seed_pts is not None and not self.config.random_init:
             self.means = torch.nn.Parameter(self.seed_pts[0])  # (Location, Color)
-            if self.config.init_pts_sphere_rad > 0.0 and self.config.init_pts_sphere_num > 0:
+            if self.config.init_pts_sphere_num > 0:
                 sphere_pts = torch.nn.Parameter((torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2)
                 dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
-                rescale = self.config.init_pts_sphere_rad / (dists + 1e-8)
+                rescale = self.get_init_sphere_radius() / (dists + 1e-8)
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
@@ -186,7 +198,7 @@ class GaussianSplattingModel(Model):
             shs[:, 3:, 1:] = 0.0
             self.colors = torch.nn.Parameter(shs[:, :, 0:1])
             self.shs_rest = torch.nn.Parameter(shs[:, :, 1:])
-            if self.config.init_pts_sphere_rad > 0.0 and self.config.init_pts_sphere_num > 0:
+            if self.config.init_pts_sphere_num > 0:
                 sphere_colors = torch.nn.Parameter(torch.rand(self.config.init_pts_sphere_num, 3, 1).cuda())
                 sphere_shs_rest = torch.nn.Parameter(torch.zeros((self.config.init_pts_sphere_num, 3, dim_sh - 1)).cuda())
                 self.colors = torch.nn.Parameter(torch.cat([self.colors.detach(), sphere_colors], dim=0))
