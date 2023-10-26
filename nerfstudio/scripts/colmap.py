@@ -13,6 +13,15 @@ from typing import Dict, Union
 
 import tyro
 
+# Consider colmap successful if it manages to register more than this fraction of input images
+MIN_SUCCESS_FRACTION = 0.75
+
+# Allow registering an image if it has at least this number of features that are already in the model
+INITIAL_MIN_INLIERS = 28
+
+# If the first try with INITIAL_MIN_INLIERS fails, try again with a lower number of inliers
+# until we reach this minimum
+MIN_MIN_INLIERS = 18
 
 def prepare_images(
     path: Path,
@@ -78,13 +87,16 @@ def prepare_images(
     print('Done')
 
 
-def run_bundle_adjustment(path: Path, refine_distortion_separately: bool = False):
+def run_bundle_adjustment(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
+                          refine_distortion_separately: bool = False):
     print('Running bundle adjustment')
     run_colmap('mapper', {
         'database_path': path / 'distorted' / 'database.db',
         'image_path': path / 'input',
         'output_path': path / 'distorted' / 'sparse',
         'Mapper.ba_global_function_tolerance': '0.000001',
+        'Mapper.max_reg_trials': 5,  # increased from default of 3
+        'Mapper.abs_pose_min_num_inliers': min_inliers,  # decreased from default of 30
         'Mapper.ba_refine_extra_params': 0 if refine_distortion_separately else 1,
     })
 
@@ -102,18 +114,19 @@ def run_bundle_adjustment(path: Path, refine_distortion_separately: bool = False
 
     input_image_count = len(list((path / 'input').iterdir()))
     model_image_count = get_image_count_in_model(merged_model)
-    if model_image_count / input_image_count < 0.5:
+    if model_image_count / input_image_count < MIN_SUCCESS_FRACTION:
         print(f'Only registered {model_image_count} out of {input_image_count} images.')
-        if not refine_distortion_separately:
-            print('Refining distortion separately')
-            return run_bundle_adjustment(path, refine_distortion_separately=True)
+        if min_inliers > MIN_MIN_INLIERS or not refine_distortion_separately:
+            print('Trying again with lower min_inliers and without refining distortion')
+            return run_bundle_adjustment(path, min_inliers=max(min_inliers - 5, MIN_MIN_INLIERS),
+                                         refine_distortion_separately=True)
         else:
             raise RuntimeError('Could not register enough images.')
     else:
         print(f'Registered {model_image_count} out of {input_image_count} images.')
 
     if len(submodels) > 1 or refine_distortion_separately:
-        print('Running one more round of bundle adjustment to get distortion params')
+        print('Running one more round of bundle adjustment after merging and/or with distortion params')
         run_colmap('bundle_adjuster', {
             'input_path': merged_model,
             'output_path': merged_model,
