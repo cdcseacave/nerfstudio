@@ -101,8 +101,8 @@ class GaussianSplattingModelConfig(ModelConfig):
     """at the beginning, resolution is 1/2^d, where d is this number"""
     cull_alpha_thresh: float = 0.01
     """threshold of opacity for culling gaussians"""
-    cull_scale_thresh: float = 0.5
-    """threshold of scale for culling gaussians"""
+    cull_scale_thresh: float = 10.0
+    """threshold of scale for culling gaussians. Make sure this is >> 4 * pi * init_pts_sphere_rad / init_pts_sphere_num"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
     densify_grad_thresh: float = 0.0002
@@ -131,13 +131,13 @@ class GaussianSplattingModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     dist2cam_loss_size: float = 50.0
     """pull points away from camera: 1 corresponds to a distance equal to the average camera distance from the center"""
-    dist2cam_loss_lambda: float = 0.0
+    dist2cam_loss_lambda: float = 0.01
     """pull points away from camera: add L1 term to loss function that has a range [0-1] -> multiply by this number"""
-    regularize_sh_lambda: float = 0.0
+    regularize_sh_lambda: float = 0.01
     """sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number"""
     init_pts_sphere_rad: float = 15.0
     """Initialize gaussians at a sphere of this dimension"""
-    init_pts_sphere_num: int = 0
+    init_pts_sphere_num: int = 20000
     """Initialize gaussians at a sphere with this many randomly placed points"""
 
 
