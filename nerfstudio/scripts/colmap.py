@@ -88,16 +88,17 @@ def run_bundle_adjustment(path: Path, refine_distortion_separately: bool = False
         'Mapper.ba_refine_extra_params': 0 if refine_distortion_separately else 1,
     })
 
-    submodels = list((path / 'distorted' / 'sparse').iterdir())
+    submodels = sorted((path / 'distorted' / 'sparse').iterdir(), key=get_image_count_in_model,
+                       reverse=True)
+    merged_model = submodels[0]
     if len(submodels) > 1:
         print(f'Merging {len(submodels)} submodels')
         for submodel in submodels[1:]:
             run_colmap('model_merger', {
-                'input_path1': submodels[0],
-                'input_path2': submodel,
-                'output_path': submodels[0],
+                'input_path1': submodel,
+                'input_path2': merged_model,
+                'output_path': merged_model,
             })
-    merged_model = submodels[0]
 
     input_image_count = len(list((path / 'input').iterdir()))
     model_image_count = get_image_count_in_model(merged_model)
