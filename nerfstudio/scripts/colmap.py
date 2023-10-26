@@ -6,6 +6,7 @@ Usage:
     pip install -e path/to/nerfstudio  # Reinstall nerfstudio to add this script to PATH
     ns-colmap --path path/to/dataset [--sequential]
 """
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ INITIAL_MIN_INLIERS = 28
 
 # If the first try with INITIAL_MIN_INLIERS fails, try again with a lower number of inliers
 # until we reach this minimum
-MIN_MIN_INLIERS = 18
+MIN_MIN_INLIERS = 15
 
 def prepare_images(
     path: Path,
@@ -61,7 +62,7 @@ def prepare_images(
                 'SiftMatching.use_gpu': 1,
             })
 
-    distorted_model = run_bundle_adjustment(path)
+    distorted_model = build_distorted_model(path)
 
     print('Aligning images')
     run_colmap('model_aligner', {
@@ -87,9 +88,13 @@ def prepare_images(
     print('Done')
 
 
-def run_bundle_adjustment(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
+def build_distorted_model(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
                           refine_distortion_separately: bool = False):
-    print('Running bundle adjustment')
+    for subdir in (path / 'distorted' / 'sparse').iterdir():
+        if subdir.is_dir():
+            shutil.rmtree(subdir)
+
+    print('Building distorted model')
     run_colmap('mapper', {
         'database_path': path / 'distorted' / 'database.db',
         'image_path': path / 'input',
@@ -118,7 +123,7 @@ def run_bundle_adjustment(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
         print(f'Only registered {model_image_count} out of {input_image_count} images.')
         if min_inliers > MIN_MIN_INLIERS or not refine_distortion_separately:
             print('Trying again with lower min_inliers and without refining distortion')
-            return run_bundle_adjustment(path, min_inliers=max(min_inliers - 5, MIN_MIN_INLIERS),
+            return build_distorted_model(path, min_inliers=max(min_inliers - 5, MIN_MIN_INLIERS),
                                          refine_distortion_separately=True)
         else:
             raise RuntimeError('Could not register enough images.')
@@ -132,6 +137,16 @@ def run_bundle_adjustment(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
             'output_path': merged_model,
             'BundleAdjustment.max_num_iterations': 1000,
         })
+
+    # Save a copy of the settings used for this model for analytics
+    with open(path / 'colmap_info.json', 'w') as f:
+        json.dump({
+            'min_inliers': min_inliers,
+            'refine_distortion_separately': refine_distortion_separately,
+            'input_image_count': input_image_count,
+            'model_image_count': model_image_count,
+            'fraction': model_image_count / input_image_count,
+        }, f)
 
     return merged_model
 
