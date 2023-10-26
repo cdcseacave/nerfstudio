@@ -116,6 +116,7 @@ def build_distorted_model(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
                 'input_path2': merged_model,
                 'output_path': merged_model,
             })
+            # If model_merger fails, colmap copies the input_path2 model to output_path.
 
     input_image_count = len(list((path / 'input').iterdir()))
     model_image_count = get_image_count_in_model(merged_model)
