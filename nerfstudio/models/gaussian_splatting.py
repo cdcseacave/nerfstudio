@@ -402,14 +402,16 @@ class GaussianSplattingModel(Model):
         
 
     def refinement_last(self, optimizers: Optimizers, step):
+        if self.step != self.config.max_iterations - 1:
+            return
         # At the end of training, remove gaussians that are only seen by 1 camera
-        if self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step == self.config.max_iterations - 1:
+        if self.config.remove_gaussians_min_cameras_in_fov > 0:
             delete_mask = (self.gaussians_camera_cnt < self.config.remove_gaussians_min_cameras_in_fov).squeeze()
             self.cull_gaussians(optimizers, delete_mask)
         # At the end of training, remove gaussians that are outside the outer sphere * remove_gaussians_outside_sphere
         if self.config.remove_gaussians_outside_sphere > 1.0:
             radius = self.config.remove_gaussians_outside_sphere * self.outer_sphere_rad
-            delet_mask = (torch.linalg.vector_norm(self.means, dim=1) > radius).squeeze()
+            delete_mask = (torch.linalg.vector_norm(self.means, dim=1) > radius).squeeze()
             self.cull_gaussians(optimizers, delete_mask)
     
     def get_cull_gaussians(self):
