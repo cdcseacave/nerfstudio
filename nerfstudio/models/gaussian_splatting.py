@@ -425,7 +425,7 @@ class GaussianSplattingModel(Model):
             toobigs = (torch.exp(self.scales).max(dim=-1).values > self.config.cull_scale_thresh).squeeze()
             delete_mask = delete_mask | toobigs
             # cull big screen space
-            delete_mask = delete_mask | (self.max_2Dsize > self.config.cull_scale_max_screen_size).squeeze()
+            delete_mask = delete_mask | (self.max_2Dsize > self.config.cull_screen_size).squeeze()
         return delete_mask
 
     def cull_gaussians(self, optimizers: Optimizers, delete_mask):
