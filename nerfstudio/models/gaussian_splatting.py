@@ -87,66 +87,52 @@ class GaussianSplattingModelConfig(ModelConfig):
     """Gaussian Splatting Model Config"""
 
     _target: Type = field(default_factory=lambda: GaussianSplattingModel)
-    max_iterations: int = 15000
-    """Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead"""
-    max_gaussians: int = 5000000
-    """Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification. It's possible for n_gaussians to go over this number by a bit, but is unlikely"""
-    warmup_length: int = 1000
-    """period of steps where refinement is turned off"""
-    refine_every: int = 100
-    """period of steps where gaussians are culled and densified"""
-    resolution_schedule: int = 200
-    """training starts at 1/d resolution, every n steps this is doubled"""
-    num_downscales: int = 2
-    """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.01
-    """threshold of opacity for culling gaussians"""
-    cull_scale_thresh: float = 10.0
-    """threshold of scale for culling gaussians. Make sure this is >> 4 * pi * init_pts_sphere_rad / init_pts_sphere_num"""
-    reset_alpha_every: int = 30
-    """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.0002
-    """threshold of positional gradient norm for densifying gaussians"""
-    densify_grad_thresh_init: float = densify_grad_thresh
-    """See densify_grad_threshold_start_increase"""
-    densify_grad_threshold_final: float = 10.0 * densify_grad_thresh
-    """See densify_grad_threshold_start_increase"""
-    densify_size_thresh: float = 0.01
-    """below this size, gaussians are *duplicated*, otherwise split"""
-    sh_degree_interval: int = 500
-    """every n intervals turn on another sh degree"""
-    max_screen_size: int = 150
-    """maximum screen size of a gaussian, in pixels"""
-    random_init: bool = False
-    """whether to initialize the positions uniformly randomly (not SFM points)"""
-    ssim_lambda: float = 0.2
-    """weight of ssim loss"""
-    stop_refine_at: int = 0.7 * max_iterations
-    """stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work"""
-    densify_until_iter_start_increase: int = 0.5 * max_iterations
-    """After this many iterations, make it harder to densify (value should be lower than densify_until_iter)"""
-    densify_grad_threshold_start_increase: float = 0.7
-    """[0-1] Start increasing densify_grad_threshold from init -> final once there are densify_grad_threshold_start_increase * max_num_splats of splats"""
-    sh_degree: int = 3
-    """maximum degree of spherical harmonics to use"""
-    dist2cam_loss_size: float = 30.0
-    """pull points away from camera until it gets this far away. Should probably be a bit larger than init_pts_sphere_rad_max"""
-    dist2cam_loss_lambda: float = 0.01
-    """pull points away from camera: add L1 term to loss function that has a range [0-1] -> multiply by this number"""
-    regularize_sh_lambda: float = 0.01
-    """sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number"""
-    init_pts_sphere_num: int = 20000
-    """Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable"""
-    init_pts_sphere_rad_pct: float = 0.99
-    """Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin"""
-    init_pts_sphere_rad_mult: float = 1.5
-    """Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value"""
-    init_pts_sphere_rad_min: float = 5.0
-    """Initialize gaussians at a sphere with this as the minimum radius"""
-    init_pts_sphere_rad_max: float = 20.0
-    """Initialize gaussians at a sphere with this as the maximum radius"""
-    remove_gaussians_min_cameras_in_fov: int = 2
-    """At the end of training, only retain gaussians if they are in the field of view of at least this many cameras. Set to 0 to disable"""
+
+    # High level settings
+    max_iterations: int = 15000 # Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead
+    max_gaussians: int = 5000000 # Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification. It's possible for n_gaussians to go over this number by a bit, but is unlikely
+    sh_degree: int = 3 # Maximum degree of spherical harmonics to use
+
+    # Refinement (densification & culling) settings
+    warmup_length: int = 1000 # Period of steps where refinement is turned off
+    stop_refine_at: int = 0.7 * max_iterations # Stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work
+    refine_every: int = 100 # Period of steps where gaussians are culled and densified
+    cull_alpha_thresh: float = 0.01 # Threshold of opacity for culling gaussians
+    cull_scale_thresh: float = 10.0 # Threshold of scale for culling gaussians. Make sure this is >> 4 * pi * init_pts_sphere_rad / init_pts_sphere_num
+    cull_scale_max_screen_size: int = 150 # Maximum screen size of a gaussian, in pixels
+    reset_alpha_every: int = 30 # Every this many refinement steps, reset the alpha
+    densify_size_thresh: float = 0.01 # Below this size, gaussians are *duplicated*, otherwise split
+    densify_grad_thresh: float = 0.0002 # Threshold of positional gradient norm for densifying gaussians
+    densify_grad_thresh_init: float = densify_grad_thresh # See densify_grad_threshold_start_increase
+    densify_grad_threshold_final: float = 10.0 * densify_grad_thresh # See densify_grad_threshold_start_increase
+    densify_grad_threshold_start_increase: float = 0.7 # [0-1] Start increasing densify_grad_threshold from init -> final once there are densify_grad_threshold_start_increase * max_num_splats of splats
+    densify_until_iter_start_increase: int = 0.5 * max_iterations # After this many iterations, make it harder to densify (value should be lower than densify_until_iter)
+    
+    # Image resolution
+    resolution_schedule: int = 200 # Training starts at 1/d resolution, every n steps this is doubled
+    num_downscales: int = 2 # At the beginning, resolution is 1/2^d, where d is this number
+
+    # Initialization
+    random_init: bool = False # Whether to initialize the positions uniformly randomly (not SFM points)
+    init_pts_sphere_num: int = 20000 # Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable
+    init_pts_sphere_rad_pct: float = 0.99 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
+    init_pts_sphere_rad_mult: float = 1.5 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
+    init_pts_sphere_rad_min: float = 5.0 # Initialize gaussians at a sphere with this as the minimum radius
+    init_pts_sphere_rad_max: float = 20.0 # Initialize gaussians at a sphere with this as the maximum radius
+    
+    # Loss function
+    ssim_lambda: float = 0.2 # Weight of ssim loss
+    dist2cam_loss_size: float = 30.0 # Pull points away from camera until it gets this far away. Should probably be a bit larger than init_pts_sphere_rad_max
+    dist2cam_loss_lambda: float = 0.01 # Pull points away from camera: add L1 term to loss function that has a range [0-1] -> multiply by this number
+    regularize_sh_lambda: float = 0.01 # sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number
+    outside_outer_sphere_lambda: float = 0.5 # Penalty for gaussians going outside the outer sphere
+    
+    # Other
+    sh_degree_interval: int = 500 # Every n intervals turn on another sh degree
+
+    # Post-processing
+    remove_gaussians_min_cameras_in_fov: int = 2 # At the end of training, only retain gaussians if they are in the field of view of at least this many cameras. Set to 0 to disable
+    remove_gaussians_outside_sphere: float = 1.2 # At the end of training, remove gaussians if they are outside the outer_sphere_radius * this value. Set to 0 to disable
 
 
 class GaussianSplattingModel(Model):
@@ -174,12 +160,14 @@ class GaussianSplattingModel(Model):
         return rad
 
     def populate_modules(self):
+        self.outer_sphere_rad = 0.5 * (self.config.init_pts_sphere_rad_min + self.config.init_pts_sphere_rad_max) # Usually overwritten
         if self.seed_pts is not None and not self.config.random_init:
             self.means = torch.nn.Parameter(self.seed_pts[0])  # (Location, Color)
             if self.config.init_pts_sphere_num > 0:
                 sphere_pts = torch.nn.Parameter((torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2)
                 dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
-                rescale = self.get_init_sphere_radius() / (dists + 1e-8)
+                self.outer_sphere_rad = self.get_init_sphere_radius()
+                rescale = self.outer_sphere_rad / (dists + 1e-8)
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
@@ -417,6 +405,11 @@ class GaussianSplattingModel(Model):
         if self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step == self.config.max_iterations - 1:
             delete_mask = (self.gaussians_camera_cnt < self.config.remove_gaussians_min_cameras_in_fov).squeeze()
             self.cull_gaussians(optimizers, delete_mask)
+        # At the end of training, remove gaussians that are outside the outer sphere * remove_gaussians_outside_sphere
+        if self.config.remove_gaussians_outside_sphere > 1.0:
+            radius = self.config.remove_gaussians_outside_sphere * self.outer_sphere_rad
+            delet_mask = (torch.linalg.vector_norm(self.means, dim=1) > radius).squeeze()
+            self.cull_gaussians(optimizers, delete_mask)
     
     def get_cull_gaussians(self):
         """
@@ -429,7 +422,7 @@ class GaussianSplattingModel(Model):
             toobigs = (torch.exp(self.scales).max(dim=-1).values > self.config.cull_scale_thresh).squeeze()
             delete_mask = delete_mask | toobigs
             # cull big screen space
-            delete_mask = delete_mask | (self.max_2Dsize > self.config.max_screen_size).squeeze()
+            delete_mask = delete_mask | (self.max_2Dsize > self.config.cull_scale_max_screen_size).squeeze()
         return delete_mask
 
     def cull_gaussians(self, optimizers: Optimizers, delete_mask):
@@ -678,7 +671,7 @@ class GaussianSplattingModel(Model):
             assert self.num_points == len(self.gaussians_camera_cnt)
             with torch.no_grad():
                 self.gaussians_camera_cnt[rend_mask] += 1
-        return {"rgb": rgb, "depth": depth_im, "depths_rendered": depths[rend_mask], "sh": coeffs}
+        return {"rgb": rgb, "depth": depth_im, "means_rendered": means_crop[rend_mask], "depths_rendered": depths[rend_mask], "sh": coeffs}
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
@@ -702,6 +695,13 @@ class GaussianSplattingModel(Model):
         if sh_coeffs.size()[1] <= 1 or n_gauss <= 0:
             return 0.0
         return torch.linalg.vector_norm(sh_coeffs[:, 1:, :], dim=None) / n_gauss
+    
+    def get_outer_sphere_loss(self, means):
+        if self.config.outside_outer_sphere_lambda == 0.0:
+            return 0.0
+        dists_out_of_sphere = torch.linalg.vector_norm(means, dim=1) - self.outer_sphere_rad
+        error = torch.clamp(dists_out_of_sphere, min=0) # Only penalize if gaussians are outside the sphere
+        return error.mean()
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
@@ -724,7 +724,8 @@ class GaussianSplattingModel(Model):
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], outputs["rgb"].permute(2, 0, 1)[None, ...])
         sh_L2 = self.get_sh_regularization_loss(outputs["sh"]) * self.config.regularize_sh_lambda # Penalize for high spherical harmonics values
         depth_L1 = self.get_depth_loss(outputs["depths_rendered"]) * self.config.dist2cam_loss_lambda # Push gaussians away from camera
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2}
+        outer_sphere_L2 = self.get_outer_sphere_loss(outputs["means_rendered"])
+        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2 + outer_sphere_L2}
 
     @torch.no_grad()
     def get_outputs_for_camera_ray_bundle(
