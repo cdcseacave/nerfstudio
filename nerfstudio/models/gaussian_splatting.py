@@ -98,14 +98,14 @@ class GaussianSplattingModelConfig(ModelConfig):
     stop_refine_at: int = 0.7 * max_iterations # Stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work
     refine_every: int = 100 # Period of steps where gaussians are culled and densified
     cull_alpha_thresh: float = 0.01 # Threshold of opacity for culling gaussians
-    cull_scale_thresh: float = 10.0 # Threshold of scale for culling gaussians. Make sure this is >> 4 * pi * init_pts_sphere_rad / init_pts_sphere_num
-    cull_scale_max_screen_size: int = 150 # Maximum screen size of a gaussian, in pixels
+    cull_scale_thresh: float = 10.0 # Threshold of scale for culling gaussians. Make this large enough for now to make it irrelevant. Use cull_screen_size instead
+    cull_screen_size: float = 0.15 # If a gaussian is more than this percent of screen space, cull it
+    split_screen_size: float = 0.05 # If a gaussian is more than this percent of screen space, split it
     reset_alpha_every: int = 30 # Every this many refinement steps, reset the alpha
     densify_size_thresh: float = 0.01 # Below this size, gaussians are *duplicated*, otherwise split
-    densify_grad_thresh: float = 0.0002 # Threshold of positional gradient norm for densifying gaussians
-    densify_grad_thresh_init: float = densify_grad_thresh # See densify_grad_threshold_start_increase
-    densify_grad_threshold_final: float = 10.0 * densify_grad_thresh # See densify_grad_threshold_start_increase
-    densify_grad_threshold_start_increase: float = 0.7 # [0-1] Start increasing densify_grad_threshold from init -> final once there are densify_grad_threshold_start_increase * max_num_splats of splats
+    densify_grad_thresh_init: float = 0.0002 # Threshold of positional gradient norm for densifying gaussians. Also see densify_grad_thresh_start_increase
+    densify_grad_thresh_final: float = 10.0 * densify_grad_thresh_init # See densify_grad_thresh_start_increase
+    densify_grad_thresh_start_increase: float = 0.7 # [0-1] Start increasing densify_grad_thresh from init -> final once there are densify_grad_thresh_start_increase * max_num_splats of splats
     densify_until_iter_start_increase: int = 0.5 * max_iterations # After this many iterations, make it harder to densify (value should be lower than densify_until_iter)
     
     # Image resolution
@@ -171,7 +171,7 @@ class GaussianSplattingModel(Model):
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
-            self.means = torch.nn.Parameter((torch.rand((100000, 3)) - 0.5) * 2)
+            self.means = torch.nn.Parameter((torch.rand((100000, 3)) - 0.5) * 10)
         self.xys_grad_norm = None
         self.max_2Dsize = None
         distances, _ = self.k_nearest_sklearn(self.means.data, 3)
@@ -304,11 +304,11 @@ class GaussianSplattingModel(Model):
                 self.vis_counts[visible_mask] = self.vis_counts[visible_mask] + 1
                 self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
 
-            # update the max screen size
+            # update the max screen size, as a ratio of number of pixels
             if self.max_2Dsize is None:
-                self.max_2Dsize = torch.zeros_like(self.radii)
+                self.max_2Dsize = torch.zeros_like(self.radii,dtype=torch.float32)
             newradii = self.radii[visible_mask]
-            self.max_2Dsize[visible_mask] = torch.maximum(self.max_2Dsize[visible_mask], newradii)
+            self.max_2Dsize[visible_mask] = torch.maximum(self.max_2Dsize[visible_mask], newradii / float(max(self.last_size[0], self.last_size[1])))
 
     def set_crop(self, crop_box: OrientedBox):
         self.crop_box = crop_box
@@ -320,9 +320,9 @@ class GaussianSplattingModel(Model):
     def refinement_after(self, optimizers: Optimizers, step):
         if self.step > self.config.warmup_length and self.step < self.config.stop_refine_at:
             if self.num_points < self.config.max_gaussians:
-                # Set densify_grad_thresh between densify_grad_thresh_init & densify_grad_threshold_final
-                ratio = 0 # [0-1] where 0 -> densify_grad_thresh_init and 1 -> densify_grad_threshold_final
-                num_splats_start_increase = self.config.max_gaussians * self.config.densify_grad_threshold_start_increase
+                # Set densify_grad_thresh between densify_grad_thresh_init & densify_grad_thresh_final
+                ratio = 0 # [0-1] where 0 -> densify_grad_thresh_init and 1 -> densify_grad_thresh_final
+                num_splats_start_increase = self.config.max_gaussians * self.config.densify_grad_thresh_start_increase
                 if self.num_points > num_splats_start_increase:
                     ratio1 = (self.num_points - num_splats_start_increase) / (self.config.max_gaussians - num_splats_start_increase)
                     if ratio1 > ratio and ratio1 <= 1:
@@ -331,14 +331,14 @@ class GaussianSplattingModel(Model):
                     ratio2 = (self.step - self.config.densify_until_iter_start_increase) / (self.config.stop_refine_at - self.config.densify_until_iter_start_increase)
                     if ratio2 > ratio and ratio2 <= 1:
                         ratio = ratio2
-                const = math.log(self.config.densify_grad_threshold_final / self.config.densify_grad_thresh_init)
-                self.config.densify_grad_thresh = self.config.densify_grad_thresh_init * math.exp(const * ratio)
+                const = math.log(self.config.densify_grad_thresh_final / self.config.densify_grad_thresh_init)
+                densify_grad_thresh = self.config.densify_grad_thresh_init * math.exp(const * ratio)
                 with torch.no_grad():
                     # then we densify
                     avg_grad_norm = (
                         (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
                     )
-                    high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
+                    high_grads = (avg_grad_norm > densify_grad_thresh).squeeze()
                     splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
                     splits &= high_grads
                     nsamps = 2
