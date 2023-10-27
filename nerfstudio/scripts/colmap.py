@@ -20,6 +20,10 @@ MIN_SUCCESS_FRACTION = 0.75
 # Allow registering an image if it has at least this number of features that are already in the model
 INITIAL_MIN_INLIERS = 28
 
+# If the first try with INITIAL_MIN_INLIERS fails, decrease the value of min_inliers by
+# this amount and try again.
+MIN_INLIERS_DECREASE = 5
+
 # If the first try with INITIAL_MIN_INLIERS fails, try again with a lower number of inliers
 # until we reach this minimum
 MIN_MIN_INLIERS = 15
@@ -124,8 +128,11 @@ def build_distorted_model(path: Path, min_inliers: int = INITIAL_MIN_INLIERS,
         print(f'Only registered {model_image_count} out of {input_image_count} images.')
         if min_inliers > MIN_MIN_INLIERS or not refine_distortion_separately:
             print('Trying again with lower min_inliers and without refining distortion')
-            return build_distorted_model(path, min_inliers=max(min_inliers - 5, MIN_MIN_INLIERS),
-                                         refine_distortion_separately=True)
+            return build_distorted_model(
+                path,
+                min_inliers=max(min_inliers - MIN_INLIERS_DECREASE, MIN_MIN_INLIERS),
+                refine_distortion_separately=True,
+            )
         else:
             raise RuntimeError('Could not register enough images.')
     else:
