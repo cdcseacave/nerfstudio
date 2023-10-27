@@ -340,6 +340,7 @@ class GaussianSplattingModel(Model):
                     )
                     high_grads = (avg_grad_norm > densify_grad_thresh).squeeze()
                     splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
+                    splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
                     splits &= high_grads
                     nsamps = 2
                     (
