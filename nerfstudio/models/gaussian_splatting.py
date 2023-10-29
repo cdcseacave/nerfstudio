@@ -717,7 +717,8 @@ class GaussianSplattingModel(Model):
         if self.config.init_pts_sphere_half:
             error_z = torch.clamp(self.outer_sphere_z_low - means[:,2], min=0) # Only penalize if gaussians are below z_low
             error = torch.max(error, error_z)
-        return error.mean()
+        error2 = torch.square(error)
+        return error2.mean()
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
