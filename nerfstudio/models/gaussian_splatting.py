@@ -119,6 +119,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     init_pts_sphere_rad_mult: float = 1.5 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
     init_pts_sphere_rad_min: float = 5.0 # Initialize gaussians at a sphere with this as the minimum radius
     init_pts_sphere_rad_max: float = 20.0 # Initialize gaussians at a sphere with this as the maximum radius
+    init_pts_sphere_half: bool = True # Bottom half of the sphere is flat (hemisphere)
     
     # Loss function
     ssim_lambda: float = 0.2 # Weight of ssim loss
@@ -169,6 +170,8 @@ class GaussianSplattingModel(Model):
                 self.outer_sphere_rad = self.get_init_sphere_radius()
                 rescale = self.outer_sphere_rad / (dists + 1e-8)
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
+                if self.config.init_pts_sphere_half:
+                    sphere_pts[(sphere_pts[:,2] < 0).squeeze(),2] = 0
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
             self.means = torch.nn.Parameter((torch.rand((100000, 3)) - 0.5) * 10)
