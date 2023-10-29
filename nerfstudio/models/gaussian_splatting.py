@@ -159,6 +159,12 @@ class GaussianSplattingModel(Model):
         rad = max(min(dist_raw, self.config.init_pts_sphere_rad_max), self.config.init_pts_sphere_rad_min)
         print("Initializing " + str(self.config.init_pts_sphere_num) + " 3D gaussians at radius = " + str(rad))
         return rad
+    
+    def get_init_bottom_plane(self) -> float:
+        zs = self.means[:,2].detach().numpy()
+        z_low = np.percentile(zs, self.config.init_pts_sphere_rad_pct*100, overwrite_input=False)
+        print("Initializing bottom of hemisphere to " + str(z_low))
+        return z_low
 
     def populate_modules(self):
         self.outer_sphere_rad = 0.5 * (self.config.init_pts_sphere_rad_min + self.config.init_pts_sphere_rad_max) # Usually overwritten
@@ -171,7 +177,8 @@ class GaussianSplattingModel(Model):
                 rescale = self.outer_sphere_rad / (dists + 1e-8)
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
                 if self.config.init_pts_sphere_half:
-                    sphere_pts[(sphere_pts[:,2] < 0).squeeze(),2] = 0
+                    self.outer_sphere_z_low = self.get_init_bottom_plane()
+                    sphere_pts[(sphere_pts[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
             self.means = torch.nn.Parameter((torch.rand((100000, 3)) - 0.5) * 10)
@@ -707,6 +714,9 @@ class GaussianSplattingModel(Model):
             return 0.0
         dists_out_of_sphere = torch.linalg.vector_norm(means, dim=1) - self.outer_sphere_rad
         error = torch.clamp(dists_out_of_sphere, min=0) # Only penalize if gaussians are outside the sphere
+        if self.config.init_pts_sphere_half:
+            error_z = torch.clamp(self.outer_sphere_z_low - means[:,2], min=0) # Only penalize if gaussians are below z_low
+            error = torch.max(error, error_z)
         return error.mean()
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
