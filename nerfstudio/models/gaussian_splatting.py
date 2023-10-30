@@ -119,7 +119,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     init_pts_sphere_rad_mult: float = 1.5 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
     init_pts_sphere_rad_min: float = 5.0 # Initialize gaussians at a sphere with this as the minimum radius
     init_pts_sphere_rad_max: float = 20.0 # Initialize gaussians at a sphere with this as the maximum radius
-    init_pts_sphere_half: bool = True # Bottom half of the sphere is flat (hemisphere)
+    init_pts_sphere_half: bool = False # Bottom half of the sphere is flat (hemisphere)
     
     # Loss function
     ssim_lambda: float = 0.2 # Weight of ssim loss
