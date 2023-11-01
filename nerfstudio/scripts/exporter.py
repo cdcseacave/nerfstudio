@@ -476,7 +476,11 @@ class ExportGaussianSplat(Exporter):
     Export 3D Gaussian Splatting model to a .ply
     """
 
+    output_dir: Optional[Path] = None
+
     def main(self) -> None:
+        if self.output_dir is None:
+            self.output_dir = self.load_config.parent
         if not self.output_dir.exists():
             self.output_dir.mkdir(parents=True)
 
@@ -522,6 +526,13 @@ class ExportGaussianSplat(Exporter):
         pcd.point.rot_3 = quats[:, 3].reshape(points_shape)
 
         o3d.t.io.write_point_cloud(str(filename), pcd)
+
+        initial_camera_transform = np.vstack([
+            pipeline.datamanager.train_dataset.cameras[0].camera_to_worlds.numpy(),
+            [0, 0, 0, 1],
+        ])
+        with open(self.output_dir / "initial_camera_transform.json", "w") as f:
+            json.dump(initial_camera_transform.ravel('F').tolist(), f)
 
 
 Commands = tyro.conf.FlagConversionOff[
