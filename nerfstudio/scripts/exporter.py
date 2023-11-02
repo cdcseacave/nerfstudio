@@ -531,8 +531,24 @@ class ExportGaussianSplat(Exporter):
             pipeline.datamanager.train_dataset.cameras[0].camera_to_worlds.numpy(),
             [0, 0, 0, 1],
         ])
-        with open(self.output_dir / "initial_camera_transform.json", "w") as f:
-            json.dump(initial_camera_transform.ravel('F').tolist(), f)
+
+        scale_transform = np.eye(4)
+        scale_transform[:3, :3] *= pipeline.datamanager.train_dataparser_outputs.dataparser_scale
+        dataparser_transform = np.vstack([
+            pipeline.datamanager.train_dataparser_outputs.dataparser_transform.numpy(),
+            [0, 0, 0, 1],
+        ])
+        # dataparser_transform is applied before scaling
+        input_transform = scale_transform @ dataparser_transform
+
+        with open(self.output_dir / "splat_info.json", "w") as f:
+            json.dump({
+                # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
+                'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
+                # Transformation matrix applied to colmap poses to convert them to the same
+                # coordinate system as the output splats.
+                'inputTransform': input_transform.ravel('F').tolist(),
+            }, f)
 
 
 Commands = tyro.conf.FlagConversionOff[
