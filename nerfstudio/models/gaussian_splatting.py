@@ -33,6 +33,7 @@ from gsplat._torch_impl import quat_to_rotmat
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.models.base_model import Model, ModelConfig
+from nerfstudio.utils import profiler
 import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -99,7 +100,8 @@ class GaussianSplattingModelConfig(ModelConfig):
     refine_every: int = 100 # Period of steps where gaussians are culled and densified
     cull_alpha_thresh: float = 0.01 # Threshold of opacity for culling gaussians
     cull_scale_thresh: float = 10.0 # Threshold of scale for culling gaussians. Make this large enough for now to make it irrelevant. Use cull_screen_size instead
-    cull_screen_size: float = 0.15 # If a gaussian is more than this percent of screen space, cull it
+    cull_screen_size_init: float = 2.0 # If a gaussian is more than this percent of screen space, cull it
+    cull_screen_size_final: float = 0.20 # If a gaussian is more than this percent of screen space, cull it
     split_screen_size: float = 0.05 # If a gaussian is more than this percent of screen space, split it
     reset_alpha_every: int = 30 # Every this many refinement steps, reset the alpha
     densify_size_thresh: float = 0.01 # Below this size, gaussians are *duplicated*, otherwise split
@@ -107,6 +109,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     densify_grad_thresh_final: float = 10.0 * densify_grad_thresh_init # See densify_grad_thresh_start_increase
     densify_grad_thresh_start_increase: float = 0.7 # [0-1] Start increasing densify_grad_thresh from init -> final once there are densify_grad_thresh_start_increase * max_num_splats of splats
     densify_until_iter_start_increase: int = 0.5 * max_iterations # After this many iterations, make it harder to densify (value should be lower than densify_until_iter)
+    densify_snap_to_outer_sphere: bool = False # If true: snap densified points to the outer_sphere
     
     # Image resolution
     resolution_schedule: int = 200 # Training starts at 1/d resolution, every n steps this is doubled
@@ -115,18 +118,19 @@ class GaussianSplattingModelConfig(ModelConfig):
     # Initialization
     random_init: bool = False # Whether to initialize the positions uniformly randomly (not SFM points)
     init_pts_sphere_num: int = 20000 # Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable
-    init_pts_sphere_rad_pct: float = 0.99 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
-    init_pts_sphere_rad_mult: float = 1.5 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
+    init_pts_sphere_rad_pct: float = 0.98 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
+    init_pts_sphere_rad_mult: float = 1.1 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
     init_pts_sphere_rad_min: float = 5.0 # Initialize gaussians at a sphere with this as the minimum radius
     init_pts_sphere_rad_max: float = 20.0 # Initialize gaussians at a sphere with this as the maximum radius
-    init_pts_sphere_half: bool = False # Bottom half of the sphere is flat (hemisphere)
+    init_pts_hemisphere: bool = True # Bottom half of the sphere is flat (hemisphere)
     
     # Loss function
     ssim_lambda: float = 0.2 # Weight of ssim loss
     dist2cam_loss_size: float = 30.0 # Pull points away from camera until it gets this far away. Should probably be a bit larger than init_pts_sphere_rad_max
     dist2cam_loss_lambda: float = 0.01 # Pull points away from camera: add L1 term to loss function that has a range [0-1] -> multiply by this number
     regularize_sh_lambda: float = 0.01 # sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number
-    outside_outer_sphere_lambda: float = 0.5 # Penalty for gaussians going outside the outer sphere
+    outside_outer_sphere_lambda: float = 1.0 # Penalty for gaussians going outside the outer sphere
+    under_hemisphere_lambda: float = 1.0 # Penalty for gaussians going under the outer hemisphere
     
     # Other
     sh_degree_interval: int = 500 # Every n intervals turn on another sh degree
@@ -162,9 +166,18 @@ class GaussianSplattingModel(Model):
     
     def get_init_bottom_plane(self) -> float:
         zs = self.means[:,2].detach().numpy()
-        z_low = np.percentile(zs, self.config.init_pts_sphere_rad_pct*100, overwrite_input=False)
+        z_low = np.percentile(zs, (1.0 - self.config.init_pts_sphere_rad_pct)*100, overwrite_input=False)
         print("Initializing bottom of hemisphere to " + str(z_low))
         return z_low
+    
+    def snap_to_outer_sphere_if_outside(self, means):
+        # If already inside the outer sphere, this does nothing, else: find closest point inside the outer sphere -> return that
+        dists = torch.linalg.vector_norm(means, dim=1, keepdim=True)
+        snap_to_sphere = (dists > self.outer_sphere_rad).squeeze()
+        rescale = self.outer_sphere_rad / dists[snap_to_sphere]
+        means[snap_to_sphere,:] = means[snap_to_sphere,:] * torch.cat([rescale, rescale, rescale], dim=1)
+        if self.config.init_pts_hemisphere:
+            means[(means[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
 
     def populate_modules(self):
         self.outer_sphere_rad = 0.5 * (self.config.init_pts_sphere_rad_min + self.config.init_pts_sphere_rad_max) # Usually overwritten
@@ -176,7 +189,7 @@ class GaussianSplattingModel(Model):
                 self.outer_sphere_rad = self.get_init_sphere_radius()
                 rescale = self.outer_sphere_rad / (dists + 1e-8)
                 sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
-                if self.config.init_pts_sphere_half:
+                if self.config.init_pts_hemisphere:
                     self.outer_sphere_z_low = self.get_init_bottom_plane()
                     sphere_pts[(sphere_pts[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
                 self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
@@ -218,7 +231,6 @@ class GaussianSplattingModel(Model):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
-        self.back_color = torch.ones(3)
         # record camera positions
         self.cameras_loaded = False
         self.cameras = []
@@ -261,6 +273,7 @@ class GaussianSplattingModel(Model):
         # Exclude the point itself from the result and return
         return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.float32)
 
+    @profiler.time_function
     def remove_from_optim(self, optimizer, deleted_mask, new_params):
         """removes the deleted_mask from the optimizer provided"""
         assert len(new_params) == 1
@@ -280,6 +293,7 @@ class GaussianSplattingModel(Model):
         optimizer.param_groups[0]["params"] = new_params
         optimizer.state[new_params[0]] = param_state
 
+    @profiler.time_function
     def dup_in_optim(self, optimizer, dup_mask, new_params, n=2):
         """adds the parameters to the optimizer"""
         param = optimizer.param_groups[0]["params"][0]
@@ -301,6 +315,7 @@ class GaussianSplattingModel(Model):
         optimizer.param_groups[0]["params"] = new_params
         del param
 
+    @profiler.time_function
     def after_train(self, step):
         with torch.no_grad():
             # keep track of a moving average of grad norms
@@ -327,6 +342,7 @@ class GaussianSplattingModel(Model):
         assert back_color.shape == (3,)
         self.back_color = back_color
 
+    @profiler.time_function
     def refinement_after(self, optimizers: Optimizers, step):
         if self.step > self.config.warmup_length and self.step < self.config.stop_refine_at:
             if self.num_points < self.config.max_gaussians:
@@ -411,6 +427,7 @@ class GaussianSplattingModel(Model):
                     self.max_2Dsize = None
         
 
+    @profiler.time_function
     def refinement_last(self, optimizers: Optimizers, step):
         if self.step != self.config.max_iterations - 1:
             return
@@ -424,20 +441,25 @@ class GaussianSplattingModel(Model):
             delete_mask = (torch.linalg.vector_norm(self.means, dim=1) > radius).squeeze()
             self.cull_gaussians(optimizers, delete_mask)
     
+    @profiler.time_function
     def get_cull_gaussians(self):
         """
         This function determineds which gaussians to cull under a certain opacity threshold
         """
         # cull transparent ones
         delete_mask = (torch.sigmoid(self.opacities) < self.config.cull_alpha_thresh).squeeze()
-        if self.step > self.config.refine_every * self.config.reset_alpha_every:
+        step0_cull_big = self.config.refine_every * self.config.reset_alpha_every
+        if self.step > step0_cull_big:
             # cull huge ones
             toobigs = (torch.exp(self.scales).max(dim=-1).values > self.config.cull_scale_thresh).squeeze()
             delete_mask = delete_mask | toobigs
             # cull big screen space
-            delete_mask = delete_mask | (self.max_2Dsize > self.config.cull_screen_size).squeeze()
+            step_ratio = (self.step - step0_cull_big) / (self.config.stop_refine_at - step0_cull_big)
+            cull_screen_size = self.config.cull_screen_size_init + (self.config.cull_screen_size_final - self.config.cull_screen_size_init) * step_ratio
+            delete_mask = delete_mask | (self.max_2Dsize > cull_screen_size).squeeze()
         return delete_mask
 
+    @profiler.time_function
     def cull_gaussians(self, optimizers: Optimizers, delete_mask):
         n_bef = self.num_points
         self.means = Parameter(self.means[~delete_mask].detach())
@@ -451,6 +473,7 @@ class GaussianSplattingModel(Model):
             self.remove_from_optim(optimizers.optimizers[group], delete_mask, param)
         print(f"Culled {n_bef - self.num_points} gaussians")
 
+    @profiler.time_function
     def split_gaussians(self, split_mask, samps):
         """
         This function splits gaussians that are too large
@@ -465,6 +488,8 @@ class GaussianSplattingModel(Model):
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
         rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
         new_means = rotated_samples + self.means[split_mask].repeat(samps, 1)
+        if self.config.densify_snap_to_outer_sphere:
+            self.snap_to_outer_sphere_if_outside(new_means)
         # step 2, sample new colors
         new_colors = self.colors[split_mask].repeat(samps, 1, 1)
         # step 3, sample new shs
@@ -478,6 +503,7 @@ class GaussianSplattingModel(Model):
         new_quats = self.quats[split_mask].repeat(samps, 1)
         return new_means, new_colors, new_shs, new_opacities, new_scales, new_quats
 
+    @profiler.time_function
     def dup_gaussians(self, dup_mask):
         """
         This function duplicates gaussians that are too small
@@ -496,6 +522,7 @@ class GaussianSplattingModel(Model):
     def num_points(self):
         return self.means.shape[0]
 
+    @profiler.time_function
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
@@ -546,6 +573,7 @@ class GaussianSplattingModel(Model):
     def _get_downscale_factor(self):
         return 2 ** max((self.config.num_downscales - self.step // self.config.resolution_schedule), 0)
         
+    @profiler.time_function
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
 
@@ -615,9 +643,9 @@ class GaussianSplattingModel(Model):
             if random.uniform(0,self.config.max_iterations) > self.step:
                 background = torch.rand(3, device=self.device)
             else:
-                background = self.back_color
+                background = torch.ones(3)
         else:
-            background = self.back_color
+            background = torch.ones(3)
 
         opacities_crop = self.opacities[crop_ids]
         means_crop = self.means[crop_ids]
@@ -696,11 +724,13 @@ class GaussianSplattingModel(Model):
 
         return {}
     
+    @profiler.time_function
     def get_depth_loss(self, depths):
         if self.config.dist2cam_loss_lambda == 0.0:
             return 0.0
         return torch.abs(self.config.dist2cam_loss_size - depths).mean() / self.config.dist2cam_loss_size
     
+    @profiler.time_function
     def get_sh_regularization_loss(self, sh_coeffs):
         if self.config.sh_degree <= 0 or self.config.regularize_sh_lambda <= 0.0:
             return 0.0
@@ -709,17 +739,24 @@ class GaussianSplattingModel(Model):
             return 0.0
         return torch.linalg.vector_norm(sh_coeffs[:, 1:, :], dim=None) / n_gauss
     
+    @profiler.time_function
     def get_outer_sphere_loss(self, means):
         if self.config.outside_outer_sphere_lambda == 0.0:
             return 0.0
         dists_out_of_sphere = torch.linalg.vector_norm(means, dim=1) - self.outer_sphere_rad
         error = torch.clamp(dists_out_of_sphere, min=0) # Only penalize if gaussians are outside the sphere
-        if self.config.init_pts_sphere_half:
-            error_z = torch.clamp(self.outer_sphere_z_low - means[:,2], min=0) # Only penalize if gaussians are below z_low
-            error = torch.max(error, error_z)
+        error2 = torch.square(error)
+        return error2.mean()
+    
+    @profiler.time_function
+    def get_under_hemisphere_loss(self, means):
+        if self.config.under_hemisphere_lambda == 0.0 or not self.config.init_pts_hemisphere:
+            return 0.0
+        error = torch.clamp(self.outer_sphere_z_low - means[:,2], min=0) # Only penalize if gaussians are below z_low
         error2 = torch.square(error)
         return error2.mean()
 
+    @profiler.time_function
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -741,10 +778,12 @@ class GaussianSplattingModel(Model):
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], outputs["rgb"].permute(2, 0, 1)[None, ...])
         sh_L2 = self.get_sh_regularization_loss(outputs["sh"]) * self.config.regularize_sh_lambda # Penalize for high spherical harmonics values
         depth_L1 = self.get_depth_loss(outputs["depths_rendered"]) * self.config.dist2cam_loss_lambda # Push gaussians away from camera
-        outer_sphere_L2 = self.get_outer_sphere_loss(outputs["means_rendered"])
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2 + outer_sphere_L2}
+        outer_sphere_L2 = self.get_outer_sphere_loss(outputs["means_rendered"]) * self.config.outside_outer_sphere_lambda # Pull gaussians inward if they go beyond the outer_sphere
+        under_hemisphere_L2 = self.get_under_hemisphere_loss(outputs["means_rendered"]) * self.config.under_hemisphere_lambda # Pull gaussians up if they go under the lower plane
+        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2 + outer_sphere_L2 + under_hemisphere_L2}
 
     @torch.no_grad()
+    @profiler.time_function
     def get_outputs_for_camera_ray_bundle(
         self, camera_ray_bundle: RayBundle, camera: Optional[Cameras] = None
     ) -> Dict[str, torch.Tensor]:
@@ -757,6 +796,7 @@ class GaussianSplattingModel(Model):
         outs = self.get_outputs(camera.to(self.device))
         return outs
 
+    @profiler.time_function
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
