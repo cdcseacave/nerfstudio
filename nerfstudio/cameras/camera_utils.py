@@ -516,7 +516,7 @@ def focus_of_attention(poses: Float[Tensor, "*num_poses 4 4"], initial_focus: Fl
 
 def auto_orient_and_center_poses(
     poses: Float[Tensor, "*num_poses 4 4"],
-    method: Literal["pca", "up", "vertical", "none"] = "up",
+    method: Literal["pca", "up", "vertical", "flip", "none"] = "up",
     center_method: Literal["poses", "focus", "none"] = "poses",
 ) -> Tuple[Float[Tensor, "*num_poses 3 4"], Float[Tensor, "3 4"]]:
     """Orients and centers the poses.
@@ -532,6 +532,7 @@ def auto_orient_and_center_poses(
     - vertical: Orient the poses so that the Z 3D direction projects close to the
         y axis in images. This method works better if cameras are not all
         looking in the same 3D direction, which may happen in camera arrays or in LLFF.
+    - flip: Keep the original orientation, but flip the Z axis if it points down in most images.
 
     There are two centering methods:
 
@@ -575,7 +576,7 @@ def auto_orient_and_center_poses(
 
         if oriented_poses.mean(dim=0)[2, 1] < 0:
             oriented_poses[:, 1:3] = -1 * oriented_poses[:, 1:3]
-    elif method in ("up", "vertical"):
+    elif method in ("up", "vertical", "flip"):
         up = torch.mean(poses[:, :3, 1], dim=0)
         up = up / torch.linalg.norm(up)
         if method == "vertical":
@@ -611,7 +612,13 @@ def auto_orient_and_center_poses(
                 # re-normalize
                 up = up / torch.linalg.norm(up)
 
-        rotation = rotation_matrix(up, torch.Tensor([0, 0, 1]))
+        if method == "flip":
+            if torch.dot(up, torch.Tensor([0, 0, 1])).item() > 0:
+                rotation = torch.eye(3)
+            else:
+                rotation = torch.Tensor([[0, 1, 0], [1, 0, 0], [0, 0, -1]])
+        else:
+            rotation = rotation_matrix(up, torch.Tensor([0, 0, 1]))
         transform = torch.cat([rotation, rotation @ -translation[..., None]], dim=-1)
         oriented_poses = transform @ poses
     elif method == "none":
