@@ -4,7 +4,7 @@ Script to run colmap on a dataset.
 
 Usage:
     pip install -e path/to/nerfstudio  # Reinstall nerfstudio to add this script to PATH
-    ns-colmap --path path/to/dataset [--sequential]
+    ns-colmap --path path/to/dataset [--sequential] [--densify] [--dense-resolution=1024]
 """
 import json
 from pathlib import Path
@@ -31,6 +31,8 @@ MIN_MIN_INLIERS = 15
 def prepare_images(
     path: Path,
     sequential: bool = False,
+    densify: bool = False,
+    dense_resolution: int = 1024,
 ):
     (path / 'distorted' / 'sparse').mkdir(exist_ok=True, parents=True)
     database_path = path / 'distorted' / 'database.db'
@@ -84,6 +86,28 @@ def prepare_images(
         'output_path': path,
         'output_type': 'COLMAP',
     })
+
+    if densify:
+        print('Undistorting images at lower resolution')
+        run_colmap('image_undistorter', {
+            'image_path': path / 'input',
+            'input_path': distorted_model,
+            'output_path': path / 'dense',
+            'output_type': 'COLMAP',
+            'max_image_size': dense_resolution,
+        })
+        print('Importing undistorted images into OpenMVS')
+        subprocess.run(
+            ['InterfaceCOLMAP', '-i', '.'],
+            cwd=path / 'dense',
+            check=True,
+        )
+        print('Densifying point cloud')
+        subprocess.run(
+            ['DensifyPointCloud', 'scene.mvs', '-o', path / 'dense.ply'],
+            cwd=path / 'dense',
+            check=True,
+        )
 
     # Move /sparse to /sparse/0
     (path / 'sparse').rename(path / 'sparse0')
