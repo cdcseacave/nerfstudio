@@ -33,7 +33,17 @@ def prepare_images(
     sequential: bool = False,
     densify: bool = False,
     dense_resolution: int = 1024,
+    clean: bool = False,
 ):
+    if clean:
+        for item in path.iterdir():
+            if item.name in {'input', 'keyframes'}:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+
     (path / 'distorted' / 'sparse').mkdir(exist_ok=True, parents=True)
     database_path = path / 'distorted' / 'database.db'
 
@@ -88,6 +98,8 @@ def prepare_images(
     })
 
     if densify:
+        if (path / 'dense').is_dir():
+            shutil.rmtree(path / 'dense')
         print('Undistorting images at lower resolution')
         run_colmap('image_undistorter', {
             'image_path': path / 'input',

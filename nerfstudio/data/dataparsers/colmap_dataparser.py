@@ -337,7 +337,7 @@ class ColmapDataParser(DataParser):
             scale_factor *= applied_scale
 
         metadata = {}
-        if self.config.load_3D_points:
+        if self.config.load_3D_points and image_filenames:
             # Load 3D points
             metadata.update(self._load_3D_points(colmap_path, transform_matrix, scale_factor))
 
@@ -358,24 +358,20 @@ class ColmapDataParser(DataParser):
 
     def _load_3D_points(self, colmap_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
         if (colmap_path.parent.parent / 'dense.ply').exists():
-            print('Loading dense.ply')
-            pcd = o3d.io.read_point_cloud(str(colmap_path.parent.parent / 'dense.ply'))
-            points3D = torch.from_numpy(np.array(pcd.points, dtype=np.float32))
-            points3D = (
-                    torch.cat(
-                        (
-                            points3D,
-                            torch.ones_like(points3D[..., :1]),
-                        ),
-                        -1,
-                    )
-                    @ transform_matrix.T
-            )
-            points3D *= scale_factor
-            points3D_rgb = torch.from_numpy(np.array(pcd.colors) * 255)
+            CONSOLE.log('Loading dense.ply')
+            pcd: o3d.geometry.PointCloud = o3d.io.read_point_cloud(str(colmap_path.parent.parent / 'dense.ply'))
+            if len(pcd.points) < 10000:
+                raise RuntimeError(f'Dense point cloud {pcd} has too few points')
+            CONSOLE.log(f'Loaded dense point cloud {pcd}')
+            pcd.transform(np.vstack([transform_matrix.numpy(),
+                                     [0, 0, 0, 1]]))
+            pcd.scale(scale_factor, center=np.array([0, 0, 0]))
+            if len(pcd.points) > 1_000_000:
+                pcd = pcd.voxel_down_sample(0.01)
+                CONSOLE.log(f'Downsampled dense point cloud {pcd}')
             return {
-                "points3D_xyz": points3D,
-                "points3D_rgb": points3D_rgb,
+                "points3D_xyz": torch.from_numpy(np.array(pcd.points, dtype=np.float32)),
+                "points3D_rgb": torch.from_numpy(np.array(pcd.colors) * 255),
             }
         if (colmap_path / "points3D.bin").exists():
             colmap_points = colmap_utils.read_points3D_binary(colmap_path / "points3D.bin")
