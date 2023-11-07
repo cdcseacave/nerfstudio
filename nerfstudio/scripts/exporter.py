@@ -28,6 +28,7 @@ from typing import List, Optional, Tuple, Union, cast
 
 import numpy as np
 import open3d as o3d
+from plyfile import PlyData, PlyElement
 import torch
 import tyro
 from typing_extensions import Annotated, Literal
@@ -498,40 +499,55 @@ class ExportGaussianSplat(Exporter):
 
         filename = self.output_dir / "point_cloud.ply"
 
-        device = o3d.core.Device("CPU:0")
-        pcd = o3d.t.geometry.PointCloud(device)
+        data = np.zeros(model.means.shape[0], dtype=np.dtype([
+            # Position
+            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+            # Always zero
+            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+            # 0-th order spherical harmonics
+            ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
+            # Three orders of spherical harmonics, regardless of how many we actually have
+            *[(f'f_rest_{i}', 'f4') for i in range(45)],
+            # Sigmoid of the opacity
+            ('opacity', 'f4'),
+            # Log of the scale
+            ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
+            # Rotation quaternion
+            ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
+        ]))
 
         with torch.no_grad():
-            pcd.point.positions = model.means.cpu().numpy()
-            # pcd.point.normals = torch.zeros_like(model.means.data).cpu().numpy()
+            positions = model.means.cpu().numpy()
+            data['x'] = positions[:, 0]
+            data['y'] = positions[:, 1]
+            data['z'] = positions[:, 2]
 
-            pcd.point.opacity = model.opacities.cpu().numpy()
+            data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
 
             colors = model.get_colors.cpu().numpy()
             scales = model.scales.cpu().numpy()
             quats = model.quats.cpu().numpy()
 
-        points_shape = (colors.shape[0], 1)
-
-        pcd.point.f_dc_0 = colors[:, 0, 0].reshape(points_shape)
-        pcd.point.f_dc_1 = colors[:, 1, 0].reshape(points_shape)
-        pcd.point.f_dc_2 = colors[:, 2, 0].reshape(points_shape)
+        data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
+        data['f_dc_1'] = colors[:, 1, 0].reshape(data.shape)
+        data['f_dc_2'] = colors[:, 2, 0].reshape(data.shape)
         sh_count = colors.shape[2] - 1
         for c in range(3):
             for i in range(sh_count):
-                setattr(pcd.point, f'f_rest_{c * sh_count + i}',
-                        colors[:, c, i + 1].reshape(points_shape))
+                data[f'f_rest_{c * sh_count + i}'] = colors[:, c, i + 1].reshape(data.shape)
 
-        pcd.point.scale_0 = scales[:, 0].reshape(points_shape)
-        pcd.point.scale_1 = scales[:, 1].reshape(points_shape)
-        pcd.point.scale_2 = scales[:, 2].reshape(points_shape)
+        data['scale_0'] = scales[:, 0].reshape(data.shape)
+        data['scale_1'] = scales[:, 1].reshape(data.shape)
+        data['scale_2'] = scales[:, 2].reshape(data.shape)
 
-        pcd.point.rot_0 = quats[:, 0].reshape(points_shape)
-        pcd.point.rot_1 = quats[:, 1].reshape(points_shape)
-        pcd.point.rot_2 = quats[:, 2].reshape(points_shape)
-        pcd.point.rot_3 = quats[:, 3].reshape(points_shape)
+        data['rot_0'] = quats[:, 0].reshape(data.shape)
+        data['rot_1'] = quats[:, 1].reshape(data.shape)
+        data['rot_2'] = quats[:, 2].reshape(data.shape)
+        data['rot_3'] = quats[:, 3].reshape(data.shape)
 
-        o3d.t.io.write_point_cloud(str(filename), pcd)
+        with open(filename, mode='wb') as f:
+            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
+        CONSOLE.print(f'Wrote {filename}')
 
         initial_camera_transform = np.vstack([
             pipeline.datamanager.train_dataset.cameras[0].camera_to_worlds.numpy(),
@@ -555,6 +571,7 @@ class ExportGaussianSplat(Exporter):
                 # coordinate system as the output splats.
                 'inputTransform': input_transform.ravel('F').tolist(),
             }, f)
+        CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
 
 
 Commands = tyro.conf.FlagConversionOff[
