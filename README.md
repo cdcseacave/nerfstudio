@@ -222,6 +222,57 @@ pip install -e .
 
 See [Installation](https://github.com/nerfstudio-project/nerfstudio/blob/main/docs/quickstart/installation.md) - **Use docker image**.
 
+### Installing openMVS
+
+```bash
+sudo apt install -y \
+  git \
+  cmake \
+  ninja-build \
+  build-essential \
+  libboost-program-options-dev \
+  libboost-filesystem-dev \
+  libboost-graph-dev \
+  libboost-iostreams-dev \
+  libboost-system-dev \
+  libeigen3-dev \
+  libflann-dev \
+  libfreeimage-dev \
+  libmetis-dev \
+  libopencv-dev \
+  libgoogle-glog-dev \
+  libgtest-dev \
+  libsqlite3-dev \
+  libglew-dev \
+  qtbase5-dev \
+  libqt5opengl5-dev \
+  libcgal-dev \
+  libceres-dev \
+  libheif-examples
+
+mkdir openMVS-dependencies
+cd openMVS-dependencies
+git clone git@github.com:cdcseacave/openMVS.git --recursive -b develop
+wget "https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/2022.02.tar.gz" -O vcglib-2022.02.tar.gz
+tar -xzf vcglib-2022.02.tar.gz
+wget "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+tar -xzf eigen-3.4.0.tar.gz
+cd openMVS
+mkdir build_dir
+cd build_dir
+EIGEN3_ROOT=../../eigen-3.4.0 \
+  VCG_ROOT=../../vcglib-2022.02 \
+  cmake .. -GNinja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX:PATH=~
+ninja
+ninja install
+```
+
+This will install openMVS binaries to `~/bin/OpenMVS/`.
+Run `export PATH=$HOME/bin/OpenMVS:$PATH` to add it to your path.
+Add that line to your `.bashrc` to make it permanent.
+
 ## 2. Training your first model!
 
 The following will train a _nerfacto_ model, our recommended model for real world scenes.
