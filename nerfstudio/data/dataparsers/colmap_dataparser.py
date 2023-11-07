@@ -75,6 +75,8 @@ class ColmapDataParserConfig(DataParserConfig):
     """Whether to load the 3D points from the colmap reconstruction."""
     max_2D_matches_per_3D_point: int = -1
     """Maximum number of 2D matches per 3D point. If set to -1, all 2D matches are loaded. If set to 0, no 2D matches are loaded."""
+    max_dense_points_before_downsampling: int = 1_000_000
+    """When loading a dense point cloud, use voxel downsampling if the number of points is greater than this number."""
 
 
 class ColmapDataParser(DataParser):
@@ -366,9 +368,15 @@ class ColmapDataParser(DataParser):
             pcd.transform(np.vstack([transform_matrix.numpy(),
                                      [0, 0, 0, 1]]))
             pcd.scale(scale_factor, center=np.array([0, 0, 0]))
-            if len(pcd.points) > 1_000_000:
-                pcd = pcd.voxel_down_sample(0.01)
-                CONSOLE.log(f'Downsampled dense point cloud {pcd}')
+            if len(pcd.points) > self.config.max_dense_points_before_downsampling:
+                voxel_size = 0.005
+                while True:
+                    downsampled = pcd.voxel_down_sample(voxel_size)
+                    if len(downsampled.points) < self.config.max_dense_points_before_downsampling:
+                        break
+                    voxel_size *= 1.25
+                pcd = downsampled
+                CONSOLE.log(f'Downsampled dense point cloud {pcd} with voxel size {voxel_size}')
             return {
                 "points3D_xyz": torch.from_numpy(np.array(pcd.points, dtype=np.float32)),
                 "points3D_rgb": torch.from_numpy(np.array(pcd.colors) * 255),
