@@ -116,7 +116,7 @@ def prepare_images(
         )
         print('Densifying point cloud')
         subprocess.run(
-            ['DensifyPointCloud', 'scene.mvs', '-o', path / 'dense.ply'],
+            ['DensifyPointCloud', '--crop-to-roi=0', 'scene.mvs', '-o', path / 'dense.ply'],
             cwd=path / 'dense',
             check=True,
         )

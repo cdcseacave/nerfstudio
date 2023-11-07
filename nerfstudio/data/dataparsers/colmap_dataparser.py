@@ -71,6 +71,8 @@ class ColmapDataParserConfig(DataParserConfig):
     """Path to depth maps directory. If not set, depths are not loaded."""
     colmap_path: Path = Path("sparse/0")
     """Path to the colmap reconstruction directory relative to the data path."""
+    dense_point_cloud_path: Optional[Path] = Path("dense.ply")
+    """Path to the dense point cloud relative to the data path. If not set, the dense point cloud is not loaded."""
     load_3D_points: bool = False
     """Whether to load the 3D points from the colmap reconstruction."""
     max_2D_matches_per_3D_point: int = -1
@@ -359,9 +361,12 @@ class ColmapDataParser(DataParser):
         return dataparser_outputs
 
     def _load_3D_points(self, colmap_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
-        if (colmap_path.parent.parent / 'dense.ply').exists():
-            CONSOLE.log('Loading dense.ply')
-            pcd: o3d.geometry.PointCloud = o3d.io.read_point_cloud(str(colmap_path.parent.parent / 'dense.ply'))
+        if self.config.dense_point_cloud_path is not None:
+            dense_point_cloud_path = self.config.data / self.config.dense_point_cloud_path
+            if not dense_point_cloud_path.exists():
+                raise ValueError(f"Dense point cloud {dense_point_cloud_path} does not exist")
+            CONSOLE.log(f'Loading {dense_point_cloud_path}')
+            pcd: o3d.geometry.PointCloud = o3d.io.read_point_cloud(str(dense_point_cloud_path))
             if len(pcd.points) < 10000:
                 raise RuntimeError(f'Dense point cloud {pcd} has too few points')
             CONSOLE.log(f'Loaded dense point cloud {pcd}')
