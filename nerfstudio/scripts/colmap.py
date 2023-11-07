@@ -4,7 +4,7 @@ Script to run colmap on a dataset.
 
 Usage:
     pip install -e path/to/nerfstudio  # Reinstall nerfstudio to add this script to PATH
-    ns-colmap --path path/to/dataset [--sequential] [--densify] [--dense-resolution=1024]
+    ns-colmap --path path/to/dataset [--sequential] [--no-densify] [--dense-resolution=1024]
 """
 import json
 from pathlib import Path
@@ -31,7 +31,7 @@ MIN_MIN_INLIERS = 15
 def prepare_images(
     path: Path,
     sequential: bool = False,
-    densify: bool = False,
+    densify: bool = True,
     dense_resolution: int = 1024,
     clean: bool = False,
 ):
