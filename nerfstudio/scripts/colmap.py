@@ -98,26 +98,25 @@ def prepare_images(
     })
 
     if densify:
-        if (path / 'dense').is_dir():
-            shutil.rmtree(path / 'dense')
-        print('Undistorting images at lower resolution')
-        run_colmap('image_undistorter', {
-            'image_path': path / 'input',
-            'input_path': distorted_model,
-            'output_path': path / 'dense',
-            'output_type': 'COLMAP',
-            'max_image_size': dense_resolution,
-        })
         print('Importing undistorted images into OpenMVS')
         subprocess.run(
             ['InterfaceCOLMAP', '-i', '.'],
-            cwd=path / 'dense',
+            cwd=path,
             check=True,
         )
         print('Densifying point cloud')
         subprocess.run(
-            ['DensifyPointCloud', '--crop-to-roi=0', 'scene.mvs', '-o', path / 'dense.ply'],
-            cwd=path / 'dense',
+            [
+                'DensifyPointCloud',
+                '--crop-to-roi=0',
+                '--resolution-level=0',
+                '--max-resolution',
+                str(dense_resolution),
+                'scene.mvs',
+                '-o',
+                path / 'dense.ply',
+            ],
+            cwd=path,
             check=True,
         )
 
