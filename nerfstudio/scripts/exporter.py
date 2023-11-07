@@ -36,6 +36,7 @@ from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
 from nerfstudio.data.scene_box import OrientedBox
+from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
 from nerfstudio.exporter.exporter_utils import (
     collect_camera_poses,
@@ -484,7 +485,12 @@ class ExportGaussianSplat(Exporter):
         if not self.output_dir.exists():
             self.output_dir.mkdir(parents=True)
 
-        _, pipeline, _, _ = eval_setup(self.load_config)
+        def update_config_callback(config: TrainerConfig):
+            config.pipeline.datamanager.dataparser.load_3D_points = False
+            return config
+
+        _, pipeline, _, _ = eval_setup(self.load_config,
+                                       update_config_callback=update_config_callback)
 
         assert isinstance(pipeline.model, GaussianSplattingModel)
 
