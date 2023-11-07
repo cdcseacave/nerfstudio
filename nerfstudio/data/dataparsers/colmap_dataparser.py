@@ -367,7 +367,7 @@ class ColmapDataParser(DataParser):
                 raise ValueError(f"Dense point cloud {dense_point_cloud_path} does not exist")
             CONSOLE.log(f'Loading {dense_point_cloud_path}')
             pcd: o3d.geometry.PointCloud = o3d.io.read_point_cloud(str(dense_point_cloud_path))
-            if len(pcd.points) < 10000:
+            if len(pcd.points) < 1000:
                 raise RuntimeError(f'Dense point cloud {pcd} has too few points')
             CONSOLE.log(f'Loaded dense point cloud {pcd}')
             pcd.transform(np.vstack([transform_matrix.numpy(),
