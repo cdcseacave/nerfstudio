@@ -549,8 +549,11 @@ class ExportGaussianSplat(Exporter):
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)
         CONSOLE.print(f'Wrote {filename}')
 
+        first_image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
+            min(pipeline.datamanager.train_dataset.image_filenames))
+
         initial_camera_transform = np.vstack([
-            pipeline.datamanager.train_dataset.cameras[0].camera_to_worlds.numpy(),
+            pipeline.datamanager.train_dataset.cameras[first_image_idx].camera_to_worlds.numpy(),
             [0, 0, 0, 1],
         ])
 
