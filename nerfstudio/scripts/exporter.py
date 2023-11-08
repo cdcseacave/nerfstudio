@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+import mediapy
 import numpy as np
 import open3d as o3d
 from plyfile import PlyData, PlyElement
@@ -575,6 +576,12 @@ class ExportGaussianSplat(Exporter):
                 'inputTransform': input_transform.ravel('F').tolist(),
             }, f)
         CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
+
+        with torch.no_grad():
+            cameras = pipeline.datamanager.train_dataset.cameras[first_image_idx:first_image_idx+1]
+            output = model.get_outputs(cameras.to(model.device))['rgb'].cpu()
+        mediapy.write_image(self.output_dir / 'render.png', output)
+        CONSOLE.print(f'Wrote {self.output_dir / "render.png"}')
 
 
 Commands = tyro.conf.FlagConversionOff[
