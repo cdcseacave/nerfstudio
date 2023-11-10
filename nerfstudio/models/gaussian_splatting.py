@@ -704,18 +704,21 @@ class GaussianSplattingModel(Model):
             W,
             background,
         )
-        depth_im = RasterizeGaussians.apply(
-            self.xys[rend_mask],
-            depths[rend_mask],
-            self.radii[rend_mask],
-            conics[rend_mask],
-            num_tiles_hit[rend_mask],
-            depths[rend_mask, None].repeat(1, 3),
-            torch.sigmoid(opacities_crop[rend_mask]),
-            H,
-            W,
-            torch.ones(3, device=self.device) * 10,
-        )[..., 0:1]
+        if self.training:
+            depth_im = None
+        else:
+            depth_im = RasterizeGaussians.apply(
+                self.xys[rend_mask],
+                depths[rend_mask],
+                self.radii[rend_mask],
+                conics[rend_mask],
+                num_tiles_hit[rend_mask],
+                depths[rend_mask, None].repeat(1, 3),
+                torch.sigmoid(opacities_crop[rend_mask]),
+                H,
+                W,
+                torch.ones(3, device=self.device) * 10,
+            )[..., 0:1]
         # At the end of training, remove gaussians that are only seen by 1 camera -> keep track of count
         if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= self.config.max_iterations - len(self.cameras):
             if self.step == self.config.max_iterations - len(self.cameras):
