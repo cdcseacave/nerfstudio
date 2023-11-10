@@ -43,6 +43,7 @@ import viser.transforms as vtf
 from gsplat.rasterize import RasterizeGaussians
 from gsplat.project_gaussians import ProjectGaussians
 from gsplat.sh import SphericalHarmonics, num_sh_bases
+from pytorch_msssim import  SSIM
 
 
 def random_quat_tensor(N, **kwargs):
@@ -233,9 +234,8 @@ class GaussianSplattingModel(Model):
         self.opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1)))
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-        self.ssim = StructuralSimilarityIndexMeasure()
+        self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
