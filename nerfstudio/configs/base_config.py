@@ -84,11 +84,9 @@ class LocalWriterConfig(InstantiateConfig):
     stats_to_track: Tuple[writer.EventName, ...] = (
         writer.EventName.ITER_TRAIN_TIME,
         writer.EventName.TRAIN_RAYS_PER_SEC,
-        writer.EventName.CURR_TEST_PSNR,
-        writer.EventName.VIS_RAYS_PER_SEC,
-        writer.EventName.TEST_RAYS_PER_SEC,
         writer.EventName.ETA,
         writer.EventName.GAUSSIAN_NUM,
+        writer.EventName.TRAIN_LOSS,
     )
     """specifies which stats will be logged/printed to terminal"""
     max_log_size: int = 10

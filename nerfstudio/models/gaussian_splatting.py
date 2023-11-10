@@ -43,6 +43,7 @@ import viser.transforms as vtf
 from gsplat.rasterize import RasterizeGaussians
 from gsplat.project_gaussians import ProjectGaussians
 from gsplat.sh import SphericalHarmonics, num_sh_bases
+from pytorch_msssim import  SSIM
 
 
 def random_quat_tensor(N, **kwargs):
@@ -233,9 +234,8 @@ class GaussianSplattingModel(Model):
         self.opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1)))
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-        self.ssim = StructuralSimilarityIndexMeasure()
+        self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
@@ -704,18 +704,21 @@ class GaussianSplattingModel(Model):
             W,
             background,
         )
-        depth_im = RasterizeGaussians.apply(
-            self.xys[rend_mask],
-            depths[rend_mask],
-            self.radii[rend_mask],
-            conics[rend_mask],
-            num_tiles_hit[rend_mask],
-            depths[rend_mask, None].repeat(1, 3),
-            torch.sigmoid(opacities_crop[rend_mask]),
-            H,
-            W,
-            torch.ones(3, device=self.device) * 10,
-        )[..., 0:1]
+        if self.training:
+            depth_im = None
+        else:
+            depth_im = RasterizeGaussians.apply(
+                self.xys[rend_mask],
+                depths[rend_mask],
+                self.radii[rend_mask],
+                conics[rend_mask],
+                num_tiles_hit[rend_mask],
+                depths[rend_mask, None].repeat(1, 3),
+                torch.sigmoid(opacities_crop[rend_mask]),
+                H,
+                W,
+                torch.ones(3, device=self.device) * 10,
+            )[..., 0:1]
         # At the end of training, remove gaussians that are only seen by 1 camera -> keep track of count
         if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= self.config.max_iterations - len(self.cameras):
             if self.step == self.config.max_iterations - len(self.cameras):
@@ -791,7 +794,16 @@ class GaussianSplattingModel(Model):
         depth_L1 = self.get_depth_loss(outputs["depths_rendered"]) * self.config.dist2cam_loss_lambda # Push gaussians away from camera
         outer_sphere_L2 = self.get_outer_sphere_loss(outputs["means_rendered"]) * self.config.outside_outer_sphere_lambda # Pull gaussians inward if they go beyond the outer_sphere
         under_hemisphere_L2 = self.get_under_hemisphere_loss(outputs["means_rendered"]) * self.config.under_hemisphere_lambda # Pull gaussians up if they go under the lower plane
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2 + outer_sphere_L2 + under_hemisphere_L2}
+
+        main_loss = (1 - self.config.ssim_lambda) * Ll1 +  self.config.ssim_lambda * simloss
+
+        return {
+            "main": main_loss,
+            "depth": depth_L1,
+            "sh": sh_L2,
+            "outer_sphere": outer_sphere_L2,
+            "under_hemisphere": under_hemisphere_L2,
+        }
 
     @torch.no_grad()
     @profiler.time_function

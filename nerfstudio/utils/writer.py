@@ -58,6 +58,7 @@ class EventName(enum.Enum):
     VIS_RAYS_PER_SEC = "Vis Rays / Sec"
     GAUSSIAN_NUM = "Number of Gaussians"
     CURR_TEST_PSNR = "Test PSNR"
+    TRAIN_LOSS = "Train Loss"
 
 
 class EventType(enum.Enum):

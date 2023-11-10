@@ -71,7 +71,8 @@ class ExperimentConfig(InstantiateConfig):
     )
     """Dictionary of optimizer groups and their schedulers"""
     vis: Literal[
-        "viewer", "wandb", "tensorboard", "comet", "viewer+wandb", "viewer+tensorboard", "viewer+comet", "viewer_beta"
+        "viewer", "wandb", "tensorboard", "comet", "viewer+wandb", "viewer+tensorboard", "viewer+comet", "viewer_beta",
+        "viewer_beta+tensorboard"
     ] = "wandb"
     """Which visualizer to use."""
     data: Optional[Path] = None
@@ -89,7 +90,7 @@ class ExperimentConfig(InstantiateConfig):
 
     def is_viewer_beta_enabled(self) -> bool:
         """Checks if a viewer beta is enabled."""
-        return "viewer_beta" == self.vis
+        return 'viewer_beta' in self.vis.split('+')
 
     def is_wandb_enabled(self) -> bool:
         """Checks if wandb is enabled."""
@@ -97,7 +98,7 @@ class ExperimentConfig(InstantiateConfig):
 
     def is_tensorboard_enabled(self) -> bool:
         """Checks if tensorboard is enabled."""
-        return ("tensorboard" == self.vis) | ("viewer+tensorboard" == self.vis)
+        return 'tensorboard' in self.vis.split('+')
 
     def is_comet_enabled(self) -> bool:
         return ("comet" == self.vis) | ("viewer+comet" == self.vis)

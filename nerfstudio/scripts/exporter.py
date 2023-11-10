@@ -480,6 +480,7 @@ class ExportGaussianSplat(Exporter):
     """
 
     output_dir: Optional[Path] = None
+    load_step: Optional[int] = None
 
     def main(self) -> None:
         if self.output_dir is None:
@@ -489,6 +490,7 @@ class ExportGaussianSplat(Exporter):
 
         def update_config_callback(config: TrainerConfig):
             config.pipeline.datamanager.dataparser.load_3D_points = False
+            config.load_step = self.load_step
             return config
 
         _, pipeline, _, _ = eval_setup(self.load_config,
