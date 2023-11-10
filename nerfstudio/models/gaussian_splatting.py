@@ -794,7 +794,16 @@ class GaussianSplattingModel(Model):
         depth_L1 = self.get_depth_loss(outputs["depths_rendered"]) * self.config.dist2cam_loss_lambda # Push gaussians away from camera
         outer_sphere_L2 = self.get_outer_sphere_loss(outputs["means_rendered"]) * self.config.outside_outer_sphere_lambda # Pull gaussians inward if they go beyond the outer_sphere
         under_hemisphere_L2 = self.get_under_hemisphere_loss(outputs["means_rendered"]) * self.config.under_hemisphere_lambda # Pull gaussians up if they go under the lower plane
-        return {"main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss + depth_L1 + sh_L2 + outer_sphere_L2 + under_hemisphere_L2}
+
+        main_loss = (1 - self.config.ssim_lambda) * Ll1 +  self.config.ssim_lambda * simloss
+
+        return {
+            "main": main_loss,
+            "depth": depth_L1,
+            "sh": sh_L2,
+            "outer_sphere": outer_sphere_L2,
+            "under_hemisphere": under_hemisphere_L2,
+        }
 
     @torch.no_grad()
     @profiler.time_function
