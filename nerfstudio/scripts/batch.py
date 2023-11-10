@@ -2,6 +2,17 @@ import datetime
 import os
 import gc
 
+def GetNumIterOptions(n_iter):
+    n = str(n_iter)
+    options = "--pipeline.model.max_iterations=" + n
+    options += " --max-num-iterations=" + n
+    options += " --optimizers.xyz.scheduler.max-steps=" + n
+    options += " --optimizers.color.scheduler.max-steps=" + n
+    options += " --optimizers.shs.scheduler.max-steps=" + n
+    options += " --optimizers.scaling.scheduler.max-steps=" + n
+    options += " --optimizers.rotation.scheduler.max-steps=" + n
+    return options
+
 # User inputs that usually stay the same
 path_to_polycam_repo = "~/workspace/polycam/"
 base_data_dir = "~/workspace/data/"
@@ -12,9 +23,8 @@ max_dimension = 2048
 zip_output = True
 
 # User inputs to change
-datasets_run = ["OilRig", "Castle", "Cockpit", "UnderwaterCar", "Shipwreck", "StatuePond", "ElliottCar", "Crystal", "ChrisCar", "Semi", "PricklyYucca", "IcyTree"] # top_datasets + secondary_datasets
-training_options = ["--pipeline.model.sh_degree=3", "--pipeline.model.sh_degree=2"] # ["--pipeline.model.init-pts-hemisphere=False", "--pipeline.model.init-pts-hemisphere=True"] # Note: changing n_iterations here doesn't work
-
+datasets_run = ["Crystal"] # ["OilRig", "Castle", "Cockpit", "UnderwaterCar", "Shipwreck", "StatuePond", "ElliottCar", "Crystal", "ChrisCar", "Semi", "PricklyYucca", "IcyTree"] # top_datasets + secondary_datasets
+training_options = [GetNumIterOptions(1500), GetNumIterOptions(2000)]
 
 def GetDownsizeDir(dataset):
     return os.path.expanduser(base_data_dir + str(max_dimension) + "/" + dataset)

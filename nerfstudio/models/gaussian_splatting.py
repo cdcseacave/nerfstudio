@@ -90,13 +90,21 @@ class GaussianSplattingModelConfig(ModelConfig):
     _target: Type = field(default_factory=lambda: GaussianSplattingModel)
 
     # High level settings
+    # NOTE: to change max_iterations in the terminal arguments, the following arguments need to be all set to match where n = max_iterations_new:
+    # --pipeline.model.max_iterations=n
+    # --max-num-iterations=n 
+    # --optimizers.xyz.scheduler.max-steps=n 
+    # --optimizers.color.scheduler.max-steps=n 
+    # --optimizers.shs.scheduler.max-steps=n 
+    # --optimizers.scaling.scheduler.max-steps=n 
+    # --optimizers.rotation.scheduler.max-steps=n
     max_iterations: int = 15000 # Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead
     max_gaussians: int = 5000000 # Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification. It's possible for n_gaussians to go over this number by a bit, but is unlikely
     sh_degree: int = 3 # Maximum degree of spherical harmonics to use
 
     # Refinement (densification & culling) settings
     warmup_length: int = 1000 # Period of steps where refinement is turned off
-    stop_refine_at: int = 0.7 * max_iterations # Stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work
+    stop_refine_at: float = 0.7 # [Multiply this value (0-1) by max_iterations] Stop splitting & culling at this step. Must be < max_iterations or remove_gaussians_min_cameras_in_fov won't work
     refine_every: int = 100 # Period of steps where gaussians are culled and densified
     cull_alpha_thresh: float = 0.01 # Threshold of opacity for culling gaussians
     cull_scale_thresh: float = 10.0 # Threshold of scale for culling gaussians. Make this large enough for now to make it irrelevant. Use cull_screen_size instead
@@ -108,7 +116,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     densify_grad_thresh_init: float = 0.0002 # Threshold of positional gradient norm for densifying gaussians. Also see densify_grad_thresh_start_increase
     densify_grad_thresh_final: float = 10.0 * densify_grad_thresh_init # See densify_grad_thresh_start_increase
     densify_grad_thresh_start_increase: float = 0.7 # [0-1] Start increasing densify_grad_thresh from init -> final once there are densify_grad_thresh_start_increase * max_num_splats of splats
-    densify_until_iter_start_increase: int = 0.5 * max_iterations # After this many iterations, make it harder to densify (value should be lower than densify_until_iter)
+    densify_until_iter_start_increase: float = 0.5 # [Multiply this value (0-1) by max_iterations] After this many iterations, make it harder to densify (value should be lower than densify_until_iter)
     densify_snap_to_outer_sphere: bool = False # If true: snap densified points to the outer_sphere
     
     # Image resolution
@@ -344,7 +352,8 @@ class GaussianSplattingModel(Model):
 
     @profiler.time_function
     def refinement_after(self, optimizers: Optimizers, step):
-        if self.step > self.config.warmup_length and self.step < self.config.stop_refine_at:
+        stop_refine_at_iter = self.config.stop_refine_at * self.config.max_iterations
+        if self.step > self.config.warmup_length and self.step < stop_refine_at_iter:
             if self.num_points < self.config.max_gaussians:
                 # Set densify_grad_thresh between densify_grad_thresh_init & densify_grad_thresh_final
                 ratio = 0 # [0-1] where 0 -> densify_grad_thresh_init and 1 -> densify_grad_thresh_final
@@ -353,8 +362,9 @@ class GaussianSplattingModel(Model):
                     ratio1 = (self.num_points - num_splats_start_increase) / (self.config.max_gaussians - num_splats_start_increase)
                     if ratio1 > ratio and ratio1 <= 1:
                         ratio = ratio1
-                if self.step > self.config.densify_until_iter_start_increase:
-                    ratio2 = (self.step - self.config.densify_until_iter_start_increase) / (self.config.stop_refine_at - self.config.densify_until_iter_start_increase)
+                densify_until_iter_start_increase = self.config.densify_until_iter_start_increase * self.config.max_iterations
+                if self.step > densify_until_iter_start_increase:
+                    ratio2 = (self.step - densify_until_iter_start_increase) / (stop_refine_at_iter - densify_until_iter_start_increase)
                     if ratio2 > ratio and ratio2 <= 1:
                         ratio = ratio2
                 const = math.log(self.config.densify_grad_thresh_final / self.config.densify_grad_thresh_init)
@@ -454,7 +464,8 @@ class GaussianSplattingModel(Model):
             toobigs = (torch.exp(self.scales).max(dim=-1).values > self.config.cull_scale_thresh).squeeze()
             delete_mask = delete_mask | toobigs
             # cull big screen space
-            step_ratio = (self.step - step0_cull_big) / (self.config.stop_refine_at - step0_cull_big)
+            stop_refine_at_iter = self.config.stop_refine_at * self.config.max_iterations
+            step_ratio = (self.step - step0_cull_big) / (stop_refine_at_iter - step0_cull_big)
             cull_screen_size = self.config.cull_screen_size_init + (self.config.cull_screen_size_final - self.config.cull_screen_size_init) * step_ratio
             delete_mask = delete_mask | (self.max_2Dsize > cull_screen_size).squeeze()
         return delete_mask
