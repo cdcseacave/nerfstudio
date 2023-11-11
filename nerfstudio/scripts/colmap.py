@@ -34,6 +34,7 @@ def prepare_images(
     densify: bool = True,
     dense_resolution: int = 1024,
     clean: bool = False,
+    gpu_index: int = 0,
 ):
     if clean:
         for item in path.iterdir():
@@ -54,6 +55,7 @@ def prepare_images(
         'ImageReader.single_camera': 1,
         'ImageReader.camera_model': 'OPENCV',
         'SiftExtraction.use_gpu': 1,
+        'SiftExtraction.gpu_index': gpu_index,
     })
 
     print('Matching features')
@@ -61,6 +63,7 @@ def prepare_images(
         run_colmap('sequential_matcher', {
             'database_path': database_path,
             'SiftMatching.use_gpu': 1,
+            'SiftMatching.gpu_index': gpu_index,
             'SequentialMatching.loop_detection': 1,
             'SequentialMatching.vocab_tree_path': get_vocab_tree(),
         })
@@ -70,12 +73,14 @@ def prepare_images(
             run_colmap('vocab_tree_matcher', {
                 'database_path': database_path,
                 'SiftMatching.use_gpu': 1,
+                'SiftMatching.gpu_index': gpu_index,
                 'VocabTreeMatching.vocab_tree_path': get_vocab_tree(),
             })
         else:
             run_colmap('exhaustive_matcher', {
                 'database_path': database_path,
                 'SiftMatching.use_gpu': 1,
+                'SiftMatching.gpu_index': gpu_index,
             })
 
     distorted_model = build_distorted_model(path)
