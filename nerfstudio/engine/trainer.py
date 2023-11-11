@@ -84,6 +84,8 @@ class TrainerConfig(ExperimentConfig):
     """Optionally log gradients during training"""
     gradient_accumulation_steps: int = 1
     """Number of steps to accumulate gradients over."""
+    gpu_index: Optional[int] = None
+    """If the machine has multiple GPUs, which GPU to use for training."""
 
 
 class Trainer:
@@ -116,7 +118,10 @@ class Trainer:
         self.world_size = world_size
         self.device: TORCH_DEVICE = config.machine.device_type
         if self.device == "cuda":
-            self.device += f":{local_rank}"
+            if self.config.gpu_index is not None:
+                self.device += f":{self.config.gpu_index}"
+            else:
+                self.device += f":{local_rank}"
         self.mixed_precision: bool = self.config.mixed_precision
         self.use_grad_scaler: bool = self.mixed_precision or self.config.use_grad_scaler
         self.training_state: Literal["training", "paused", "completed"] = "training"
