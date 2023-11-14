@@ -1,4 +1,5 @@
 import datetime
+import time
 import os
 import gc
 
@@ -19,12 +20,13 @@ base_data_dir = "~/workspace/data/"
 base_out_dir = "~/workspace/data/batch_out/"
 top_datasets = ["CellTower2", "IcyTree", "Castle", "Cockpit", "UnderwaterCar", "Shipwreck", "StatuePond", "Smoker", "ElliottCar", "OilRig"]
 secondary_datasets = ["Crystal", "PumpkinTree", "ChickenCoop", "ChrisCar", "PricklyYucca", "Semi"]
+other_dataset = ["ArcvisRoom", "VanGoghRoom", "Woman2", "Castle", "Crystal", "CellTower2", "OilRig"]
 max_dimension = 2048
 zip_output = True
 
 # User inputs to change
-datasets_run = ["Crystal"] # ["OilRig", "Castle", "Cockpit", "UnderwaterCar", "Shipwreck", "StatuePond", "ElliottCar", "Crystal", "ChrisCar", "Semi", "PricklyYucca", "IcyTree"] # top_datasets + secondary_datasets
-training_options = [GetNumIterOptions(1500), GetNumIterOptions(2000)]
+datasets_run = ["Semi"] # top_datasets + secondary_datasets
+training_options = [GetNumIterOptions(1500)] # Note: changing n_iterations here doesn't work
 
 def GetDownsizeDir(dataset):
     return os.path.expanduser(base_data_dir + str(max_dimension) + "/" + dataset)
@@ -70,7 +72,10 @@ def RunDataset(dataset, config, out_dir):
         os.system(command)
 
     # Run gaussian splatting training
-    os.system("ns-train gaussian-splatting --data " + dataset_dir + " --output-dir " + dataset_dir + " --viewer.quit-on-train-completion=True " + config)
+    t_start = time.time()
+    os.system("ns-train gaussian-splatting --data " + dataset_dir + " --output-dir " + dataset_dir + " --vis=viewer_beta+tensorboard --viewer.quit-on-train-completion=True " + config)
+    t_end = time.time()
+    print("\n\nTotal training time = " + str(t_end - t_start) + "\n\n\n")
 
     # Find the gaussian splatting model directory name
     model_dir0 = dataset_dir + "/" + dataset + "/gaussian-splatting"

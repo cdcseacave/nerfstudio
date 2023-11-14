@@ -532,12 +532,12 @@ class ExportGaussianSplat(Exporter):
             quats = model.quats.cpu().numpy()
 
         data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
-        data['f_dc_1'] = colors[:, 1, 0].reshape(data.shape)
-        data['f_dc_2'] = colors[:, 2, 0].reshape(data.shape)
-        sh_count = colors.shape[2] - 1
+        data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
+        data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
+        sh_count = colors.shape[1] - 1
         for c in range(3):
             for i in range(sh_count):
-                data[f'f_rest_{c * sh_count + i}'] = colors[:, c, i + 1].reshape(data.shape)
+                data[f'f_rest_{c * sh_count + i}'] = colors[:, i + 1, c].reshape(data.shape)
 
         data['scale_0'] = scales[:, 0].reshape(data.shape)
         data['scale_1'] = scales[:, 1].reshape(data.shape)

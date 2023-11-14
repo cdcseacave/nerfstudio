@@ -126,6 +126,7 @@ class GaussianSplattingModelConfig(ModelConfig):
 
     # Initialization
     random_init: bool = False # Whether to initialize the positions uniformly randomly (not SFM points)
+    init_pts_sphere_on_iter: int = -1 # -1 to initialize immediately. Higher value to initialize later in the optimization
     init_pts_sphere_num: int = 20000 # Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable
     init_pts_sphere_rad_pct: float = 0.98 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
     init_pts_sphere_rad_mult: float = 1.1 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
@@ -188,20 +189,39 @@ class GaussianSplattingModel(Model):
         if self.config.init_pts_hemisphere:
             means[(means[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
 
+    def get_init_sphere_pts(self):
+        sphere_pts = (torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2
+        dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
+        rescale = self.outer_sphere_rad / (dists + 1e-8)
+        sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
+        if self.config.init_pts_hemisphere:
+            sphere_pts[(sphere_pts[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
+        return sphere_pts
+    
+    def add_init_sphere_pts(self):
+        # Get new points
+        sphere_pts = self.get_init_sphere_pts().to(self.means.device)
+        dim_sh = num_sh_bases(self.config.sh_degree)
+        distances, _ = self.k_nearest_sklearn(sphere_pts.data, 3)
+        distances = torch.from_numpy(distances)
+        avg_dist = distances.mean(dim=-1, keepdim=True)
+        sphere_colors    = torch.rand(self.config.init_pts_sphere_num, 1, 3).to(self.colors.device)
+        sphere_shs_rest  = torch.zeros((self.config.init_pts_sphere_num, dim_sh - 1, 3)).to(self.shs_rest.device)
+        sphere_scales    = torch.log(avg_dist.repeat(1, 3)).to(self.scales.device)
+        sphere_opacities = torch.logit(0.1 * torch.ones(self.config.init_pts_sphere_num, 1)).to(self.opacities.device)
+        sphere_quats     = random_quat_tensor(self.config.init_pts_sphere_num).to(self.quats.device)
+        # Add to model
+        self.means     = torch.nn.Parameter(torch.cat([self.means.detach(),     sphere_pts],       dim=0))
+        self.colors    = torch.nn.Parameter(torch.cat([self.colors.detach(),    sphere_colors],    dim=0))
+        self.shs_rest  = torch.nn.Parameter(torch.cat([self.shs_rest.detach(),  sphere_shs_rest],  dim=0))
+        self.scales    = torch.nn.Parameter(torch.cat([self.scales.detach(),    sphere_scales],    dim=0))
+        self.opacities = torch.nn.Parameter(torch.cat([self.opacities.detach(), sphere_opacities], dim=0))
+        self.quats     = torch.nn.Parameter(torch.cat([self.quats.detach(),     sphere_quats],     dim=0))
+
     def populate_modules(self):
         self.outer_sphere_rad = 0.5 * (self.config.init_pts_sphere_rad_min + self.config.init_pts_sphere_rad_max) # Usually overwritten
         if self.seed_pts is not None and not self.config.random_init:
             self.means = torch.nn.Parameter(self.seed_pts[0])  # (Location, Color)
-            if self.config.init_pts_sphere_num > 0:
-                sphere_pts = torch.nn.Parameter((torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2)
-                dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
-                self.outer_sphere_rad = self.get_init_sphere_radius()
-                rescale = self.outer_sphere_rad / (dists + 1e-8)
-                sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
-                if self.config.init_pts_hemisphere:
-                    self.outer_sphere_z_low = self.get_init_bottom_plane()
-                    sphere_pts[(sphere_pts[:,2] < self.outer_sphere_z_low).squeeze(),2] = self.outer_sphere_z_low
-                self.means = torch.nn.Parameter(torch.cat([self.means.detach(), sphere_pts], dim=0))
         else:
             self.means = torch.nn.Parameter((torch.rand((100000, 3)) - 0.5) * 10)
         self.xys_grad_norm = None
@@ -217,21 +237,23 @@ class GaussianSplattingModel(Model):
 
         if self.seed_pts is not None and not self.config.random_init:
             fused_color = RGB2SH(self.seed_pts[1] / 255)
-            shs = torch.zeros((fused_color.shape[0], 3, dim_sh)).float().cuda()
-            shs[:, :3, 0] = fused_color
-            shs[:, 3:, 1:] = 0.0
-            self.colors = torch.nn.Parameter(shs[:, :, 0:1])
-            self.shs_rest = torch.nn.Parameter(shs[:, :, 1:])
-            if self.config.init_pts_sphere_num > 0:
-                sphere_colors = torch.nn.Parameter(torch.rand(self.config.init_pts_sphere_num, 3, 1).cuda())
-                sphere_shs_rest = torch.nn.Parameter(torch.zeros((self.config.init_pts_sphere_num, 3, dim_sh - 1)).cuda())
-                self.colors = torch.nn.Parameter(torch.cat([self.colors.detach(), sphere_colors], dim=0))
-                self.shs_rest = torch.nn.Parameter(torch.cat([self.shs_rest.detach(), sphere_shs_rest], dim=0))
+            shs = torch.zeros((fused_color.shape[0], dim_sh, 3)).float().cuda()
+            shs[:, 0, :3] = fused_color
+            shs[:, 1:, 3:] = 0.0
+            self.colors = torch.nn.Parameter(shs[:, 0:1, :])
+            self.shs_rest = torch.nn.Parameter(shs[:, 1:, :])
         else:
-            self.colors = torch.nn.Parameter(torch.rand(self.num_points, 3, 1))
-            self.shs_rest = torch.nn.Parameter(torch.zeros((self.num_points, 3, dim_sh - 1)))
-
+            self.colors = torch.nn.Parameter(torch.rand(self.num_points, 1, 3))
+            self.shs_rest = torch.nn.Parameter(torch.zeros((self.num_points, dim_sh - 1, 3)))
         self.opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1)))
+
+        # Init outer sphere dimensions & points
+        self.outer_sphere_rad = self.get_init_sphere_radius()
+        if self.config.init_pts_hemisphere:
+            self.outer_sphere_z_low = self.get_init_bottom_plane()
+        if self.config.init_pts_sphere_on_iter < 0 and self.config.init_pts_sphere_num > 0:
+            self.add_init_sphere_pts()
+
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
 
@@ -247,7 +269,7 @@ class GaussianSplattingModel(Model):
     def get_colors(self):
         color = self.colors
         shs_rest = self.shs_rest
-        return torch.cat((color, shs_rest), dim=2)
+        return torch.cat((color, shs_rest), dim=1)
 
     def load_state_dict(self, dict, **kwargs):
         # resize the parameters to match the new number of points
@@ -256,9 +278,9 @@ class GaussianSplattingModel(Model):
         self.means = torch.nn.Parameter(torch.zeros(newp, 3, device=self.device))
         self.scales = torch.nn.Parameter(torch.zeros(newp, 3, device=self.device))
         self.quats = torch.nn.Parameter(torch.zeros(newp, 4, device=self.device))
-        self.colors = torch.nn.Parameter(torch.zeros(self.num_points, 3, 1, device=self.device))
+        self.colors = torch.nn.Parameter(torch.zeros(self.num_points, 1, 3, device=self.device))
         self.shs_rest = torch.nn.Parameter(
-            torch.zeros(self.num_points, 3, num_sh_bases(self.config.sh_degree) - 1, device=self.device)
+            torch.zeros(self.num_points, num_sh_bases(self.config.sh_degree) - 1, 3, device=self.device)
         )
         self.opacities = torch.nn.Parameter(torch.zeros(newp, 1, device=self.device))
         super().load_state_dict(dict, **kwargs)
@@ -318,6 +340,20 @@ class GaussianSplattingModel(Model):
             ],
             dim=0,
         )
+        del optimizer.state[param]
+        optimizer.state[new_params[0]] = param_state
+        optimizer.param_groups[0]["params"] = new_params
+        del param
+
+    @profiler.time_function
+    def add_to_optim(self, optimizer, new_params, n):
+        """adds the parameters to the optimizer"""
+        param = optimizer.param_groups[0]["params"][0]
+        param_state = optimizer.state[param]
+        param_size = tuple(param_state["exp_avg"].size())
+        param_size = (n,) + param_size[1:]
+        param_state["exp_avg"] = torch.cat([param_state["exp_avg"], torch.zeros(param_size).cuda()], dim=0)
+        param_state["exp_avg_sq"] = torch.cat([param_state["exp_avg_sq"], torch.zeros(param_size).cuda()], dim=0)
         del optimizer.state[param]
         optimizer.state[new_params[0]] = param_state
         optimizer.param_groups[0]["params"] = new_params
@@ -409,7 +445,6 @@ class GaussianSplattingModel(Model):
                     for group, param in param_groups.items():
                         self.dup_in_optim(optimizers.optimizers[group], split_idcs, param, n=nsamps)
                     dup_idcs = torch.where(dups)[0]
-
                     param_groups = self.get_param_groups()
                     for group, param in param_groups.items():
                         self.dup_in_optim(optimizers.optimizers[group], dup_idcs, param, 1)
@@ -435,6 +470,21 @@ class GaussianSplattingModel(Model):
                     self.xys_grad_norm = None
                     self.vis_counts = None
                     self.max_2Dsize = None
+
+
+    @profiler.time_function
+    def add_sphere_pts(self, optimizers: Optimizers, step):
+        if self.config.init_pts_sphere_on_iter == self.step and self.config.init_pts_sphere_num > 0:
+            self.add_init_sphere_pts()
+            if not self.max_2Dsize is None: # append zeros to the max_2Dsize tensor
+                sphere_max_2Dsize = torch.nn.Parameter(torch.zeros((self.config.init_pts_sphere_num)).cuda())
+                self.max_2Dsize = torch.cat([self.max_2Dsize, sphere_max_2Dsize], dim=0)
+            self.xys_grad_norm = None
+            self.vis_counts = None
+            self.max_2Dsize = None
+            param_groups = self.get_param_groups()
+            for group, param in param_groups.items():
+                self.add_to_optim(optimizers.optimizers[group], param, self.config.init_pts_sphere_num)
         
 
     @profiler.time_function
@@ -551,6 +601,13 @@ class GaussianSplattingModel(Model):
                 [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
                 self.refinement_after,
                 update_every_num_iters=self.config.refine_every,
+                args=[training_callback_attributes.optimizers],
+            )
+        )
+        cbs.append(
+            TrainingCallback(
+                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                self.add_sphere_pts,
                 args=[training_callback_attributes.optimizers],
             )
         )
@@ -685,7 +742,8 @@ class GaussianSplattingModel(Model):
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
             n_coeffs = num_sh_bases(n)
-            coeffs = colors_crop.permute(0, 2, 1)[rend_mask, :n_coeffs, :]
+            with profiler.time_function("sh_coeff_permute"):
+                coeffs = colors_crop[rend_mask, :n_coeffs, :]
             rgbs = SphericalHarmonics.apply(n, viewdirs, coeffs)
             rgbs = torch.clamp(rgbs + 0.5, 0.0, 1.0)
         else:

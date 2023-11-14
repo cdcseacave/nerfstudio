@@ -272,6 +272,7 @@ ninja install
 This will install openMVS binaries to `~/bin/OpenMVS/`.
 Run `export PATH=$HOME/bin/OpenMVS:$PATH` to add it to your path.
 Add that line to your `.bashrc` to make it permanent.
+Note: If eigen-3.4 doesn't get picked up, might need to change `EIGEN3_ROOT` to `Eigen3_Root` in the commands above
 
 ## 2. Training your first model!
 
