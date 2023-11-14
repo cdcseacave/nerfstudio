@@ -242,6 +242,11 @@ class Trainer:
             num_iterations = self.config.max_num_iterations
             step = 0
             for step in range(self._start_step, self._start_step + num_iterations):
+                if hasattr(self.pipeline.model, 'early_stop_at_step') \
+                        and self.pipeline.model.early_stop_at_step is not None \
+                        and self.pipeline.model.early_stop_at_step <= step:
+                    CONSOLE.log(f'Stopping early at step {step}')
+                    break
                 while self.training_state == "paused":
                     time.sleep(0.01)
                 with self.train_lock:
