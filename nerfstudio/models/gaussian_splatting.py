@@ -144,7 +144,6 @@ class GaussianSplattingModelConfig(ModelConfig):
     # Early stopping
     early_stop_check_every: int = 500 # Check every n steps if the loss has stopped decreasing
     early_stop_loss_diff_threshold: float = 3e-6 # If the loss has decreased by less than this amount per step, stop training
-    early_stop_disabled_after_opacity_reset_steps: int = 1000 # After opacity reset, don't consider early stopping for this many steps
     early_stop_additional_steps: int = 2000 # If early stopping is triggered, train for this many more steps before stopping
 
     # Other
@@ -252,7 +251,7 @@ class GaussianSplattingModel(Model):
         self.early_stop_at_step: Optional[int] = None
         self.avg_loss = 1.0
         self.min_avg_loss = 1.0
-        self.prev_min_avg_loss = 1.0
+        self.prev_avg_loss = 1.0
 
     @property
     def get_colors(self):
@@ -357,14 +356,16 @@ class GaussianSplattingModel(Model):
             if (step + 5) % self.config.early_stop_check_every == 0:
                 if not self.early_stop_at_step and self.should_stop_early(step):
                     self.early_stop_at_step = step + self.config.early_stop_additional_steps
-                    print('\n' * 15 + f"Early stopping at step {step}: {self.early_stop_at_step}" + '\n' * 15)
-                self.prev_min_avg_loss = self.min_avg_loss
+                    print('\n' * 15
+                          + f"Early stopping triggered at step {step}, stopping at step {self.early_stop_at_step}"
+                          + '\n' * 15)
+                self.min_avg_loss = self.prev_avg_loss = self.avg_loss
 
     def should_stop_early(self, step: int) -> bool:
         # Don't stop early if we've recently reset the alpha
         reset_interval = self.config.reset_alpha_every * self.config.refine_every
         steps_since_reset = step % reset_interval
-        if steps_since_reset < self.config.early_stop_disabled_after_opacity_reset_steps:
+        if steps_since_reset < self.config.early_stop_check_every:
             return False
 
         # Don't stop early if we're almost done
@@ -372,7 +373,7 @@ class GaussianSplattingModel(Model):
             return False
 
         threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
-        return self.prev_min_avg_loss - self.min_avg_loss < threshold
+        return self.prev_avg_loss - self.min_avg_loss < threshold
 
     def set_crop(self, crop_box: OrientedBox):
         self.crop_box = crop_box
@@ -773,7 +774,7 @@ class GaussianSplattingModel(Model):
         return {
             'avg_loss': torch.Tensor([self.avg_loss]),
             'min_avg_loss': torch.Tensor([self.min_avg_loss]),
-            'loss_diff': torch.Tensor([self.prev_min_avg_loss - self.min_avg_loss]),
+            'loss_diff': torch.Tensor([self.prev_avg_loss - self.min_avg_loss]),
         }
     
     @profiler.time_function
