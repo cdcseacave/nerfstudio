@@ -493,8 +493,8 @@ class ExportGaussianSplat(Exporter):
             config.load_step = self.load_step
             return config
 
-        _, pipeline, _, _ = eval_setup(self.load_config,
-                                       update_config_callback=update_config_callback)
+        _, pipeline, _, step = eval_setup(self.load_config,
+                                          update_config_callback=update_config_callback)
 
         assert isinstance(pipeline.model, GaussianSplattingModel)
 
@@ -576,6 +576,7 @@ class ExportGaussianSplat(Exporter):
                 # Transformation matrix applied to colmap poses to convert them to the same
                 # coordinate system as the output splats.
                 'inputTransform': input_transform.ravel('F').tolist(),
+                'steps': step + 1,
             }, f)
         CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
 
