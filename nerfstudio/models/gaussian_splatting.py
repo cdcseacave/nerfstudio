@@ -360,7 +360,10 @@ class GaussianSplattingModel(Model):
                     print('\n' * 15
                           + f"Early stopping triggered at step {step}, stopping at step {self.early_stop_at_step}"
                           + '\n' * 15)
-                self.min_avg_loss = self.prev_avg_loss = self.avg_loss
+                # New target to compare against
+                self.prev_avg_loss = self.avg_loss
+                # Also reset the min, because sometimes the loss increases
+                self.min_avg_loss = self.avg_loss
 
     def should_stop_early(self, step: int) -> bool:
         # Don't stop early if we've recently reset the alpha
