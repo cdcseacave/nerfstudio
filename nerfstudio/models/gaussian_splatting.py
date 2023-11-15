@@ -143,7 +143,8 @@ class GaussianSplattingModelConfig(ModelConfig):
 
     # Early stopping
     early_stop_check_every: int = 500 # Check every n steps if the loss has stopped decreasing
-    early_stop_loss_diff_threshold: float = 3e-6 # If the loss has decreased by less than this amount per step, stop training
+    early_stop_loss_diff_threshold: float = 2.5e-6 # If the loss has decreased by less than this amount per step, stop training
+    early_stop_max_loss: float = 0.2 # Don't stop early if the loss is greater than this
     early_stop_additional_steps: int = 2000 # If early stopping is triggered, train for this many more steps before stopping
 
     # Other
@@ -370,6 +371,10 @@ class GaussianSplattingModel(Model):
 
         # Don't stop early if we're almost done
         if self.config.max_iterations - step < self.config.early_stop_additional_steps:
+            return False
+
+        # Don't stop early if loss is too high
+        if self.avg_loss > self.config.early_stop_max_loss:
             return False
 
         threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
