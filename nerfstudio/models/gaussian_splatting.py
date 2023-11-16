@@ -141,7 +141,13 @@ class GaussianSplattingModelConfig(ModelConfig):
     regularize_sh_lambda: float = 0.01 # sh coeffs are multiplied by x, y, z, xx, xy, xz, etc. where [x,y,z] is a unit vector (no coeff normalization needed) so all coeffs are summed together for L2 loss -> multiply by this number
     outside_outer_sphere_lambda: float = 1.0 # Penalty for gaussians going outside the outer sphere
     under_hemisphere_lambda: float = 1.0 # Penalty for gaussians going under the outer hemisphere
-    
+
+    # Early stopping
+    early_stop_check_every: int = 500 # Check every n steps if the loss has stopped decreasing
+    early_stop_loss_diff_threshold: float = 2.8e-6 # If the loss has decreased by less than this amount per step, stop training
+    early_stop_max_loss: float = 0.2 # Don't stop early if the loss is greater than this
+    early_stop_additional_steps: int = 2000 # If early stopping is triggered, train for this many more steps before stopping
+
     # Other
     sh_degree_interval: int = 500 # Every n intervals turn on another sh degree
 
@@ -265,6 +271,11 @@ class GaussianSplattingModel(Model):
         self.cameras_loaded = False
         self.cameras = []
 
+        self.early_stop_at_step: Optional[int] = None
+        self.avg_loss = 1.0
+        self.min_avg_loss = 1.0
+        self.prev_avg_loss = 1.0
+
     @property
     def get_colors(self):
         color = self.colors
@@ -379,6 +390,35 @@ class GaussianSplattingModel(Model):
             newradii = self.radii[visible_mask]
             self.max_2Dsize[visible_mask] = torch.maximum(self.max_2Dsize[visible_mask], newradii / float(max(self.last_size[0], self.last_size[1])))
 
+            if (step + 5) % self.config.early_stop_check_every == 0:
+                if not self.early_stop_at_step and self.should_stop_early(step):
+                    self.early_stop_at_step = step + self.config.early_stop_additional_steps
+                    print('\n' * 15
+                          + f"Early stopping triggered at step {step}, stopping at step {self.early_stop_at_step}"
+                          + '\n' * 15)
+                # New target to compare against
+                self.prev_avg_loss = self.avg_loss
+                # Also reset the min, because sometimes the loss increases
+                self.min_avg_loss = self.avg_loss
+
+    def should_stop_early(self, step: int) -> bool:
+        # Don't stop early if we've recently reset the alpha
+        reset_interval = self.config.reset_alpha_every * self.config.refine_every
+        steps_since_reset = step % reset_interval
+        if steps_since_reset < self.config.early_stop_check_every:
+            return False
+
+        # Don't stop early if we're almost done
+        if self.config.max_iterations - step < self.config.early_stop_additional_steps:
+            return False
+
+        # Don't stop early if loss is too high
+        if self.avg_loss > self.config.early_stop_max_loss:
+            return False
+
+        threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
+        return self.prev_avg_loss - self.min_avg_loss < threshold
+
     def set_crop(self, crop_box: OrientedBox):
         self.crop_box = crop_box
 
@@ -388,6 +428,9 @@ class GaussianSplattingModel(Model):
 
     @profiler.time_function
     def refinement_after(self, optimizers: Optimizers, step):
+        # Don't split or cull if we're stopping early
+        if self.early_stop_at_step is not None:
+            return
         stop_refine_at_iter = self.config.stop_refine_at * self.config.max_iterations
         if self.step > self.config.warmup_length and self.step < stop_refine_at_iter:
             if self.num_points < self.config.max_gaussians:
@@ -708,7 +751,7 @@ class GaussianSplattingModel(Model):
             1,
         )
         if self.training:
-            if random.uniform(0,self.config.max_iterations) > self.step:
+            if random.uniform(0,self.config.max_iterations) > self.step and not self.early_stop_at_step:
                 background = torch.rand(3, device=self.device)
             else:
                 background = torch.ones(3)
@@ -794,7 +837,11 @@ class GaussianSplattingModel(Model):
             batch: ground truth batch corresponding to outputs
         """
 
-        return {}
+        return {
+            'avg_loss': torch.Tensor([self.avg_loss]),
+            'min_avg_loss': torch.Tensor([self.min_avg_loss]),
+            'loss_diff': torch.Tensor([self.prev_avg_loss - self.min_avg_loss]),
+        }
     
     @profiler.time_function
     def get_depth_loss(self, depths):
@@ -854,6 +901,11 @@ class GaussianSplattingModel(Model):
         under_hemisphere_L2 = self.get_under_hemisphere_loss(outputs["means_rendered"]) * self.config.under_hemisphere_lambda # Pull gaussians up if they go under the lower plane
 
         main_loss = (1 - self.config.ssim_lambda) * Ll1 +  self.config.ssim_lambda * simloss
+
+        avg_loss_decay = 1 - 1 / (2 * self.num_train_data)
+        self.avg_loss = self.avg_loss * avg_loss_decay + main_loss.item() * (1 - avg_loss_decay)
+        if self.avg_loss < self.min_avg_loss:
+            self.min_avg_loss = self.avg_loss
 
         return {
             "main": main_loss,

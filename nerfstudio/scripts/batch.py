@@ -2,6 +2,7 @@ import datetime
 import time
 import os
 import gc
+import shutil
 
 def GetNumIterOptions(n_iter):
     n = str(n_iter)
@@ -88,6 +89,7 @@ def RunDataset(dataset, config, out_dir):
     model_file = model_dir + "/point_cloud.ply"
     out_file = out_dir + "/" + dataset + ".ply"
     os.system("cp " + model_file + " " + out_file)
+    shutil.copy(model_dir + '/splat_info.json', out_dir + '/' + dataset + '.json')
 
     # Convert .ply -> .splat (follow instructions in main polycam repo to run: yarn setup)
     cwd = os.getcwd()
