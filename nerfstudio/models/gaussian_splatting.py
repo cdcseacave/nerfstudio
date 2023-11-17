@@ -380,6 +380,10 @@ class GaussianSplattingModel(Model):
         if self.avg_loss > self.config.early_stop_max_loss:
             return False
 
+        # Ensure alpha reset runs at least once
+        if step < reset_interval:
+            return False
+
         threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
         return self.prev_avg_loss - self.min_avg_loss < threshold
 
@@ -482,7 +486,7 @@ class GaussianSplattingModel(Model):
 
     @profiler.time_function
     def refinement_last(self, optimizers: Optimizers, step):
-        if self.step != self.config.max_iterations - 1:
+        if step != (self.early_stop_at_step or self.config.max_iterations) - 1:
             return
         # At the end of training, remove gaussians that are only seen by 1 camera
         if self.config.remove_gaussians_min_cameras_in_fov > 0:
@@ -763,8 +767,9 @@ class GaussianSplattingModel(Model):
                 torch.ones(3, device=self.device) * 10,
             )[..., 0:1]
         # At the end of training, remove gaussians that are only seen by 1 camera -> keep track of count
-        if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= self.config.max_iterations - len(self.cameras):
-            if self.step == self.config.max_iterations - len(self.cameras):
+        ending_step = self.early_stop_at_step or self.config.max_iterations
+        if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= ending_step - len(self.cameras):
+            if self.step == ending_step - len(self.cameras):
                 self.gaussians_camera_cnt = torch.nn.Parameter(torch.zeros(self.num_points, 1, device=self.device))
             assert self.num_points == len(self.gaussians_camera_cnt)
             with torch.no_grad():
