@@ -488,34 +488,33 @@ class ExportGaussianSplat(Exporter):
 
         filename = self.output_dir / "point_cloud.ply"
 
-        device = o3d.core.Device("CPU:0")
-        pcd = o3d.t.geometry.PointCloud(device)
+        map_to_tensors = {}
 
         with torch.no_grad():
-            pcd.point.positions = model.means.cpu().numpy()
-            # pcd.point.normals = torch.zeros_like(model.means.data).cpu().numpy()
+            positions = model.means.cpu().numpy()
+            map_to_tensors["positions"] = o3d.core.Tensor(positions, o3d.core.float32)
+            # map_to_tensors["normals"] = o3d.core.Tensor(np.zeros_like(positions), o3d.core.float32)
 
-            pcd.point.opacity = model.opacities.cpu().numpy()
+            colors = model.colors.data.cpu().numpy()
+            for i in range(colors.shape[1]):
+                map_to_tensors[f"f_dc_{i}"] = colors[:, i]
 
-            colors = model.get_colors.cpu().numpy()
-            scales = model.scales.cpu().numpy()
-            quats = model.quats.cpu().numpy()
+            shs = model.shs_rest.data.cpu().numpy()
+            shs = shs.reshape((colors.shape[0], -1, 1))
+            for i in range(shs.shape[-2]):
+                map_to_tensors[f"f_rest_{i}"] = shs[:, i]
 
-        points_shape = (colors.shape[0], 1)
+            map_to_tensors["opacity"] = model.opacities.data.cpu().numpy()
 
-        pcd.point.f_dc_0 = colors[:, 0, 0].reshape(points_shape)
-        pcd.point.f_dc_1 = colors[:, 1, 0].reshape(points_shape)
-        pcd.point.f_dc_2 = colors[:, 2, 0].reshape(points_shape)
-        # pcd.point.f_rest_0 = colors[:, 3].reshape(points_shape)
+            scales = model.scales.data.cpu().unsqueeze(-1).numpy()
+            for i in range(3):
+                map_to_tensors[f"scale_{i}"] = scales[:, i]
 
-        pcd.point.scale_0 = scales[:, 0].reshape(points_shape)
-        pcd.point.scale_1 = scales[:, 1].reshape(points_shape)
-        pcd.point.scale_2 = scales[:, 2].reshape(points_shape)
+            quats = model.quats.data.cpu().unsqueeze(-1).numpy()
+            for i in range(4):
+                map_to_tensors[f"rot_{i}"] = quats[:, i]
 
-        pcd.point.rot_0 = quats[:, 0].reshape(points_shape)
-        pcd.point.rot_1 = quats[:, 1].reshape(points_shape)
-        pcd.point.rot_2 = quats[:, 2].reshape(points_shape)
-        pcd.point.rot_3 = quats[:, 3].reshape(points_shape)
+        pcd = o3d.t.geometry.PointCloud(map_to_tensors)
 
         o3d.t.io.write_point_cloud(str(filename), pcd)
 
