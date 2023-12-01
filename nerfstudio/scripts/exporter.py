@@ -482,6 +482,7 @@ class ExportGaussianSplat(Exporter):
 
     output_dir: Optional[Path] = None
     load_step: Optional[int] = None
+    transform_to_colmap_coordinates: bool = False
 
     def main(self) -> None:
         if self.output_dir is None:
@@ -570,32 +571,6 @@ class ExportGaussianSplat(Exporter):
         # dataparser_transform is applied before scaling
         input_transform = scale_transform @ dataparser_transform
 
-        filename = self.output_dir / 'transformed.ply'
-        transformed_positions = np.linalg.inv(input_transform) @ np.concatenate([
-            positions,
-            np.ones((positions.shape[0], 1)),
-        ], axis=1).T
-        data['x'] = transformed_positions[0]
-        data['y'] = transformed_positions[1]
-        data['z'] = transformed_positions[2]
-        transformed_scales = torch.sigmoid(torch.from_numpy(scales))
-        transformed_scales = (transformed_scales / pipeline.datamanager.train_dataparser_outputs.dataparser_scale).T
-        transformed_scales = torch.logit(transformed_scales).numpy()
-        data['scale_0'] = transformed_scales[0]
-        data['scale_1'] = transformed_scales[1]
-        data['scale_2'] = transformed_scales[2]
-        rotation_transform = Quaternion(matrix=np.linalg.inv(dataparser_transform))
-        for i in range(len(data['rot_0'])):
-            quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
-            quat = rotation_transform * quat
-            data['rot_0'][i] = quat[0]
-            data['rot_1'][i] = quat[1]
-            data['rot_2'][i] = quat[2]
-            data['rot_3'][i] = quat[3]
-        with open(filename, mode='wb') as f:
-            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
-        CONSOLE.print(f'Wrote {filename}')
-
         with open(self.output_dir / "splat_info.json", "w") as f:
             json.dump({
                 # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
@@ -612,6 +587,49 @@ class ExportGaussianSplat(Exporter):
             output = model.get_outputs(cameras.to(model.device))['rgb'].cpu()
         mediapy.write_image(self.output_dir / 'render.png', output)
         CONSOLE.print(f'Wrote {self.output_dir / "render.png"}')
+
+        if self.transform_to_colmap_coordinates:
+            self.write_transformed_ply(
+                data=data, positions=positions, scales=scales,
+                rotation_transform=dataparser_transform,
+                position_transform=input_transform,
+                scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
+            )
+
+    def write_transformed_ply(
+        self,
+        data: np.ndarray,
+        positions: np.ndarray,
+        scales: np.ndarray,
+        rotation_transform: np.ndarray,
+        position_transform: np.ndarray,
+        scale_transform: float,
+    ):
+        filename = self.output_dir / 'transformed.ply'
+        transformed_positions = np.linalg.inv(position_transform) @ np.concatenate([
+            positions,
+            np.ones((positions.shape[0], 1)),
+        ], axis=1).T
+        data['x'] = transformed_positions[0]
+        data['y'] = transformed_positions[1]
+        data['z'] = transformed_positions[2]
+        transformed_scales = torch.sigmoid(torch.from_numpy(scales))
+        transformed_scales = (transformed_scales / scale_transform).T
+        transformed_scales = torch.logit(transformed_scales).numpy()
+        data['scale_0'] = transformed_scales[0]
+        data['scale_1'] = transformed_scales[1]
+        data['scale_2'] = transformed_scales[2]
+        rotation_transform = Quaternion(matrix=np.linalg.inv(rotation_transform))
+        for i in range(len(data['rot_0'])):
+            quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
+            quat = rotation_transform * quat
+            data['rot_0'][i] = quat[0]
+            data['rot_1'][i] = quat[1]
+            data['rot_2'][i] = quat[2]
+            data['rot_3'][i] = quat[3]
+        with open(filename, mode='wb') as f:
+            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
+        CONSOLE.print(f'Wrote {filename}')
 
 
 Commands = tyro.conf.FlagConversionOff[
