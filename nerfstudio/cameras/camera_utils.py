@@ -516,8 +516,9 @@ def focus_of_attention(poses: Float[Tensor, "*num_poses 4 4"], initial_focus: Fl
 
 def auto_orient_and_center_poses(
     poses: Float[Tensor, "*num_poses 4 4"],
-    method: Literal["pca", "up", "vertical", "flip", "none"] = "up",
+    method: Literal["pca", "up", "vertical", "flip", "gravity", "none"] = "up",
     center_method: Literal["poses", "focus", "none"] = "poses",
+    gravity: Optional[Float[Tensor, "*num_poses 3"]] = None,
 ) -> Tuple[Float[Tensor, "*num_poses 3 4"], Float[Tensor, "3 4"]]:
     """Orients and centers the poses.
 
@@ -533,6 +534,8 @@ def auto_orient_and_center_poses(
         y axis in images. This method works better if cameras are not all
         looking in the same 3D direction, which may happen in camera arrays or in LLFF.
     - flip: Keep the original orientation, but flip the Z axis if it points down in most images.
+    - gravity: Orient the poses so that the average gravity vector is aligned with the negative
+        z axis.
 
     There are two centering methods:
 
@@ -576,8 +579,12 @@ def auto_orient_and_center_poses(
 
         if oriented_poses.mean(dim=0)[2, 1] < 0:
             oriented_poses[:, 1:3] = -1 * oriented_poses[:, 1:3]
-    elif method in ("up", "vertical", "flip"):
-        up = torch.mean(poses[:, :3, 1], dim=0)
+    elif method in ("up", "vertical", "flip", "gravity"):
+        if method == "gravity":
+            assert gravity is not None
+            up = torch.mean(torch.bmm(poses[:, :3, :3], -gravity[:, :, None]).squeeze(2), dim=0)
+        else:
+            up = torch.mean(poses[:, :3, 1], dim=0)
         up = up / torch.linalg.norm(up)
         if method == "vertical":
             # If cameras are not all parallel (e.g. not in an LLFF configuration),

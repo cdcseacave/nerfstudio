@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 from dataclasses import dataclass, field
@@ -52,7 +53,8 @@ class ColmapDataParserConfig(DataParserConfig):
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
-    orientation_method: Literal["pca", "up", "vertical", "flip", "none"] = "flip"
+    orientation_method: Literal["pca", "up", "vertical", "flip", "gravity", "gravity-or-flip", "none"] \
+        = "gravity-or-flip"
     """The method to use for orientation."""
     center_method: Literal["poses", "focus", "none"] = "focus"
     """The method to use to center the poses."""
@@ -69,6 +71,8 @@ class ColmapDataParserConfig(DataParserConfig):
     """Path to masks directory. If not set, masks are not loaded."""
     depths_path: Optional[Path] = None
     """Path to depth maps directory. If not set, depths are not loaded."""
+    gravity_path: Optional[Path] = Path("keyframes/gravity")
+    """Path to gravity directory. If not set, gravity is not loaded."""
     colmap_path: Path = Path("sparse/0")
     """Path to the colmap reconstruction directory relative to the data path."""
     dense_point_cloud_path: Optional[Path] = Path("dense.ply")
@@ -156,6 +160,14 @@ class ColmapDataParser(DataParser):
                 frame["depth_path"] = (
                     (self.config.data / self.config.depths_path / im_data.name).with_suffix(".png").as_posix()
                 )
+            if self.config.gravity_path is not None:
+                gravity_path = (
+                    (self.config.data / self.config.gravity_path / im_data.name).with_suffix(".json")
+                )
+                if gravity_path.exists():
+                    with open(gravity_path, "r") as f:
+                        gravity = json.load(f)
+                        frame["gravity"] = np.array([gravity['x'], gravity['y'], gravity['z']])
             frames.append(frame)
             if camera_model is not None:
                 assert camera_model == frame["camera_model"], "Multiple camera models are not supported"
@@ -226,6 +238,7 @@ class ColmapDataParser(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
+        gravity = []
 
         fx = []
         fy = []
@@ -259,6 +272,8 @@ class ColmapDataParser(DataParser):
                 mask_filenames.append(Path(frame["mask_path"]))
             if "depth_path" in frame:
                 depth_filenames.append(Path(frame["depth_path"]))
+            if "gravity" in frame:
+                gravity.append(frame["gravity"])
 
         assert len(mask_filenames) == 0 or (
             len(mask_filenames) == len(image_filenames)
@@ -272,11 +287,20 @@ class ColmapDataParser(DataParser):
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
         """
+        assert len(gravity) == 0 or len(gravity) == len(image_filenames), """
+        Different number of images and gravity vectors.
+        """
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        gravity = torch.from_numpy(np.array(gravity).astype(np.float32)) if gravity else None
+        if self.config.orientation_method == 'gravity-or-flip':
+            orientation_method = 'gravity' if gravity is not None else 'flip'
+        else:
+            orientation_method = self.config.orientation_method
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
-            method=self.config.orientation_method,
+            method=orientation_method,
             center_method=self.config.center_method,
+            gravity=gravity,
         )
 
         # Scale poses
