@@ -213,8 +213,8 @@ def get_image_count_in_model(model: Path) -> int:
     model_info: str = run_colmap('model_analyzer', {
         'path': model,
     }, capture_output=True).stdout.decode('utf-8')
-    line = [line for line in model_info.split('\n') if line.startswith('Registered images:')][0]
-    return int(line.split(':')[1].strip())
+    line = [line for line in model_info.split('\n') if 'Registered images:' in line][0]
+    return int(line.rsplit(':', 1)[1].strip())
 
 
 def run_colmap(subcommand: str, options: Dict[str, Union[str, Path, int, float]],
