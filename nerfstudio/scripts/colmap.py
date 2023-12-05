@@ -86,13 +86,25 @@ def prepare_images(
     distorted_model = build_distorted_model(path)
 
     print('Aligning images')
-    run_colmap('model_aligner', {
+    ok = run_colmap('model_aligner', {
         'input_path': distorted_model,
         'database_path': database_path,
-        'alignment_max_error': 0.1,
-        'alignment_type': 'plane',
+        'ref_is_gps': 1,
+        'alignment_max_error': 2.0,
+        'alignment_type': 'ecef',
         'output_path': distorted_model,
-    })
+        'transform_path': path / 'ecef_transform.txt',
+    }).returncode
+    if ok != 0:
+        print("Model aligner failed; trying without GPS.")
+        run_colmap('model_aligner', {
+            'input_path': distorted_model,
+            'database_path': database_path,
+            'ref_is_gps': 0,
+            'alignment_max_error': 2.0, # not used for plane alignment
+            'alignment_type': 'plane',
+            'output_path': distorted_model,
+        })
 
     print('Undistorting images')
     run_colmap('image_undistorter', {
