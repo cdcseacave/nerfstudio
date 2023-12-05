@@ -128,7 +128,11 @@ class FullImageDatamanager(DataManager, Generic[TDataset]):
             distortion_params = camera.distortion_params.numpy()
             image = data["image"].numpy()
 
-            if camera.camera_type.item() == CameraType.PERSPECTIVE.value:
+            if camera.camera_type.item() == CameraType.PERSPECTIVE.value \
+                    and not distortion_params.any():
+                # Image is already undistorted
+                pass
+            elif camera.camera_type.item() == CameraType.PERSPECTIVE.value:
                 distortion_params = np.array(
                     [
                         distortion_params[0],
@@ -191,7 +195,11 @@ class FullImageDatamanager(DataManager, Generic[TDataset]):
             distortion_params = camera.distortion_params.numpy()
             image = data["image"].numpy()
 
-            if camera.camera_type.item() == CameraType.PERSPECTIVE.value:
+            if camera.camera_type.item() == CameraType.PERSPECTIVE.value \
+                    and not distortion_params.any():
+                # Image is already undistorted
+                pass
+            elif camera.camera_type.item() == CameraType.PERSPECTIVE.value:
                 distortion_params = np.array(
                     [
                         distortion_params[0],
