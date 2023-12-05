@@ -37,6 +37,7 @@ from typing_extensions import Annotated, Literal
 
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
+from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.trainer import TrainerConfig
@@ -52,6 +53,7 @@ from nerfstudio.exporter.marching_cubes import (
 from nerfstudio.fields.sdf_field import SDFField
 from nerfstudio.models.gaussian_splatting import GaussianSplattingModel
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
+from nerfstudio.process_data import colmap_utils
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
 
@@ -499,6 +501,7 @@ class ExportGaussianSplat(Exporter):
                                           update_config_callback=update_config_callback)
 
         assert isinstance(pipeline.model, GaussianSplattingModel)
+        assert isinstance(pipeline.datamanager, FullImageDatamanager)
 
         model: GaussianSplattingModel = pipeline.model
 
@@ -554,13 +557,13 @@ class ExportGaussianSplat(Exporter):
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)
         CONSOLE.print(f'Wrote {filename}')
 
+        frames_json = self.get_frames_json(pipeline.datamanager)
+        with open(self.output_dir / "frames.json", "w") as f:
+            json.dump(frames_json, f)
+        CONSOLE.print(f'Wrote {self.output_dir / "frames.json"}')
+
         first_image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
             min(pipeline.datamanager.train_dataset.image_filenames))
-
-        initial_camera_transform = np.vstack([
-            pipeline.datamanager.train_dataset.cameras[first_image_idx].camera_to_worlds.numpy(),
-            [0, 0, 0, 1],
-        ])
 
         scale_transform = np.eye(4)
         scale_transform[:3, :3] *= pipeline.datamanager.train_dataparser_outputs.dataparser_scale
@@ -574,7 +577,7 @@ class ExportGaussianSplat(Exporter):
         with open(self.output_dir / "splat_info.json", "w") as f:
             json.dump({
                 # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
-                'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
+                'initialCameraTransform': frames_json[0]['transform'],
                 # Transformation matrix applied to colmap poses to convert them to the same
                 # coordinate system as the output splats.
                 'inputTransform': input_transform.ravel('F').tolist(),
@@ -630,6 +633,36 @@ class ExportGaussianSplat(Exporter):
         with open(filename, mode='wb') as f:
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)
         CONSOLE.print(f'Wrote {filename}')
+
+    def get_frames_json(self, datamanager: FullImageDatamanager):
+        frames = []
+        for i, path in enumerate(datamanager.train_dataset.image_filenames):
+            transform = np.vstack([
+                datamanager.train_dataset.cameras[i].camera_to_worlds.numpy(),
+                [0, 0, 0, 1],
+            ])
+            frames.append({
+                'name': path.name,
+                'transform': transform.ravel('F').tolist(),
+            })
+        frames = sorted(frames, key=lambda f: f['name'])
+
+        distorted_colmap_path = datamanager.config.data / 'distorted_model'
+        if distorted_colmap_path.exists():
+            camera_id_to_camera = colmap_utils.read_cameras_binary(distorted_colmap_path / 'cameras.bin')
+            image_id_to_image = colmap_utils.read_images_binary(distorted_colmap_path / 'images.bin')
+            for image_id, image in image_id_to_image.items():
+                frame = next(f for f in frames if f['name'] == image.name)
+                camera = camera_id_to_camera[image.camera_id]
+                frame['params'] = colmap_utils.parse_colmap_camera_params(camera)
+                frame['params']['fx'] = frame['params'].pop('fl_x')
+                frame['params']['fy'] = frame['params'].pop('fl_y')
+                # For camera model OPENCV, this writes out w, h, fx, fy, cx, cy, k1, k2, p1, p2.
+        else:
+            CONSOLE.print(f'No distorted model found at {distorted_colmap_path}. '+
+                          'Not writing distortion params to frames.json.')
+
+        return frames
 
 
 Commands = tyro.conf.FlagConversionOff[

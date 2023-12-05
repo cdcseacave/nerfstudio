@@ -40,7 +40,7 @@ def prepare_images(
         for item in path.iterdir():
             if item.name in {'input', 'keyframes'}:
                 continue
-            if item.is_dir():
+            if item.is_dir() and not item.is_symlink():
                 shutil.rmtree(item)
             else:
                 item.unlink()
@@ -93,6 +93,9 @@ def prepare_images(
         'alignment_type': 'plane',
         'output_path': distorted_model,
     })
+
+    (path / 'distorted_model').symlink_to(distorted_model.relative_to(path),
+                                          target_is_directory=True)
 
     print('Undistorting images')
     run_colmap('image_undistorter', {
@@ -210,9 +213,10 @@ def get_vocab_tree(filename: str = 'vocab_tree_flickr100K_words256K.bin') -> Pat
 
 
 def get_image_count_in_model(model: Path) -> int:
-    model_info: str = run_colmap('model_analyzer', {
+    analyze_result = run_colmap('model_analyzer', {
         'path': model,
-    }, capture_output=True).stdout.decode('utf-8')
+    }, capture_output=True)
+    model_info: str = analyze_result.stdout.decode('utf-8') + analyze_result.stderr.decode('utf-8')
     line = [line for line in model_info.split('\n') if 'Registered images:' in line][0]
     return int(line.rsplit(':', 1)[1].strip())
 
