@@ -643,6 +643,8 @@ class ExportGaussianSplat(Exporter):
             ])
             frames.append({
                 'name': path.name,
+                # Column-major 4x4 camera-to-worlds transform matrix for the camera pose.
+                # This matches the frames.json that we write out for object capture.
                 'transform': transform.ravel('F').tolist(),
             })
         frames = sorted(frames, key=lambda f: f['name'])
