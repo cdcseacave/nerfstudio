@@ -92,9 +92,9 @@ def prepare_images(
             'database_path': database_path,
             'ref_is_gps': 1,
             'alignment_max_error': 2.0,
-            'alignment_type': 'ecef', # Earth-Centered, Earth-Fixed is a Cartesian coordinate system commonly used in geodesy, where the origin (0,0,0) is located at the center of the Earth, and the axes are fixed with respect to the Earth.
+            'alignment_type': 'enu', # East-North-Up, centered at the first image
             'output_path': distorted_model,
-            'transform_path': path / 'ecef_transform.txt',
+            'transform_path': path / 'enu_transform.txt',
         })
     except subprocess.CalledProcessError:
         print("Model aligner with GPS failed; trying without GPS.")
