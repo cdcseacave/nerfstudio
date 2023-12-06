@@ -87,7 +87,7 @@ def prepare_images(
 
     print('Aligning images')
     try:
-        ok = run_colmap('model_aligner', {
+        run_colmap('model_aligner', {
             'input_path': distorted_model,
             'database_path': database_path,
             'ref_is_gps': 1,
@@ -95,19 +95,17 @@ def prepare_images(
             'alignment_type': 'ecef', # Earth-Centered, Earth-Fixed is a Cartesian coordinate system commonly used in geodesy, where the origin (0,0,0) is located at the center of the Earth, and the axes are fixed with respect to the Earth.
             'output_path': distorted_model,
             'transform_path': path / 'ecef_transform.txt',
-        }).returncode
-        if ok != 0:
-            print("Model aligner with GPS failed; trying without GPS.")
-            run_colmap('model_aligner', {
-                'input_path': distorted_model,
-                'database_path': database_path,
-                'ref_is_gps': 0,
-                'alignment_max_error': 2.0, # not used for plane alignment
-                'alignment_type': 'plane',
-                'output_path': distorted_model,
-            })
-    except subprocess.CalledProcessError as e:
-        print(f"Model aligner failed: {e.output}")
+        })
+    except subprocess.CalledProcessError:
+        print("Model aligner with GPS failed; trying without GPS.")
+        run_colmap('model_aligner', {
+            'input_path': distorted_model,
+            'database_path': database_path,
+            'ref_is_gps': 0,
+            'alignment_max_error': 2.0, # not used for plane alignment
+            'alignment_type': 'plane',
+            'output_path': distorted_model,
+        })
 
     (path / 'distorted_model').symlink_to(distorted_model.relative_to(path),
                                           target_is_directory=True)
