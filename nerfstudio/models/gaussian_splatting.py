@@ -419,6 +419,8 @@ class GaussianSplattingModel(Model):
             return False
 
         threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
+        print(f'Checking if we should stop early. Min avg loss: {self.min_avg_loss}, '
+              f'previous avg loss: {self.prev_avg_loss}, threshold: {threshold}')
         return self.prev_avg_loss - self.min_avg_loss < threshold
 
     def set_crop(self, crop_box: OrientedBox):
