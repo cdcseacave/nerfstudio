@@ -542,7 +542,7 @@ class ExportGaussianSplat(Exporter):
         sh_count = colors.shape[1] - 1
         for c in range(3):
             for i in range(sh_count):
-                data[f'f_rest_{c * sh_count + i}'] = colors[:, i + 1, c].reshape(data.shape)
+                data[f'f_rest_{c * 15 + i}'] = colors[:, i + 1, c].reshape(data.shape)
 
         data['scale_0'] = scales[:, 0].reshape(data.shape)
         data['scale_1'] = scales[:, 1].reshape(data.shape)
