@@ -98,9 +98,9 @@ class GaussianSplattingModelConfig(ModelConfig):
     # --optimizers.shs.scheduler.max-steps=n 
     # --optimizers.scaling.scheduler.max-steps=n 
     # --optimizers.rotation.scheduler.max-steps=n
-    max_iterations: int = 15000 # Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead
+    max_iterations: int = 30000 # Sets the defaults in method_configs.py. Multiple config values will be messed up if num_iterations is set via the command line arg. Change it here instead
     max_gaussians: int = 5000000 # Max number of 3D gaussians. As this number is approached, densify_grad_thresh is increased to slow down densification. It's possible for n_gaussians to go over this number by a bit, but is unlikely
-    sh_degree: int = 3 # Maximum degree of spherical harmonics to use
+    sh_degree: int = 2 # Maximum degree of spherical harmonics to use
 
     # Refinement (densification & culling) settings
     warmup_length: int = 1000 # Period of steps where refinement is turned off
@@ -419,6 +419,8 @@ class GaussianSplattingModel(Model):
             return False
 
         threshold = self.config.early_stop_loss_diff_threshold * self.config.early_stop_check_every
+        print(f'Checking if we should stop early. Min avg loss: {self.min_avg_loss}, '
+              f'previous avg loss: {self.prev_avg_loss}, threshold: {threshold}')
         return self.prev_avg_loss - self.min_avg_loss < threshold
 
     def set_crop(self, crop_box: OrientedBox):
