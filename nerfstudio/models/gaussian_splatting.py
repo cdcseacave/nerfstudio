@@ -292,7 +292,15 @@ class GaussianSplattingModel(Model):
             torch.zeros(self.num_points, num_sh_bases(self.config.sh_degree) - 1, 3, device=self.device)
         )
         self.opacities = torch.nn.Parameter(torch.zeros(newp, 1, device=self.device))
+        if dict['colors'].shape[1] == 3:  # colors/SHs are permuted
+            self.colors = torch.nn.Parameter(torch.zeros(self.num_points, 3, 1, device=self.device))
+            self.shs_rest = torch.nn.Parameter(
+                torch.zeros(self.num_points, 3, num_sh_bases(self.config.sh_degree) - 1, device=self.device)
+            )
         super().load_state_dict(dict, **kwargs)
+        if dict['colors'].shape[1] == 3:  # permute colors/SHs back
+            self.colors = torch.nn.Parameter(self.colors.permute(0, 2, 1))
+            self.shs_rest = torch.nn.Parameter(self.shs_rest.permute(0, 2, 1))
 
     def k_nearest_sklearn(self, x: torch.Tensor, k: int):
         """
