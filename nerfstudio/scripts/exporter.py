@@ -43,7 +43,7 @@ from nerfstudio.exporter import texture_utils, tsdf_utils
 from nerfstudio.exporter.exporter_utils import collect_camera_poses, export_frame_render, generate_point_cloud, get_mesh_from_filename
 from nerfstudio.exporter.marching_cubes import generate_mesh_with_multires_marching_cubes
 from nerfstudio.fields.sdf_field import SDFField
-from nerfstudio.models.gaussian_splatting import GaussianSplattingModel
+from nerfstudio.models.gaussian_splatting import GaussianSplattingModel, SH2RGB
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
@@ -515,8 +515,10 @@ class ExportGaussianSplat(Exporter):
         data = np.zeros(model.means.shape[0], dtype=np.dtype([
             # Position
             ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            # Always zero
+            # Normal
             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+            # RGB
+            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
             # 0-th order spherical harmonics
             ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
             # Three orders of spherical harmonics, regardless of how many we actually have
@@ -531,9 +533,6 @@ class ExportGaussianSplat(Exporter):
 
         with torch.no_grad():
             positions = model.means.cpu().numpy()
-            data['x'] = positions[:, 0]
-            data['y'] = positions[:, 1]
-            data['z'] = positions[:, 2]
 
             data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
 
@@ -541,10 +540,27 @@ class ExportGaussianSplat(Exporter):
             scales = model.scales.cpu().numpy()
             quats = model.quats.cpu().numpy()
 
+        sh_coefficients = colors.shape[1]
+        sh_deg = int(np.sqrt(sh_coefficients)) - 1
+        CONSOLE.print(f'Exporting {positions.shape[0]} splats with SH degree {sh_deg}')
+
+        data['x'] = positions[:, 0]
+        data['y'] = positions[:, 1]
+        data['z'] = positions[:, 2]
+
+        normals = self.estimate_normals(np.exp(scales), quats)
+        data['nx'] = normals[:, 0]
+        data['ny'] = normals[:, 1]
+        data['nz'] = normals[:, 2]
+
+        data['red']   = (SH2RGB(colors[:, 0, 0].reshape(data.shape)) * 255.0).astype(np.uint8)
+        data['green'] = (SH2RGB(colors[:, 0, 1].reshape(data.shape)) * 255.0).astype(np.uint8)
+        data['blue']  = (SH2RGB(colors[:, 0, 2].reshape(data.shape)) * 255.0).astype(np.uint8)
+
         data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
         data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
         data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
-        sh_count = min(colors.shape[1] - 1, 15)
+        sh_count = min(sh_coefficients, 16) - 1
         for c in range(3):
             for i in range(sh_count):
                 data[f'f_rest_{c * sh_count + i}'] = colors[:, i + 1, c].reshape(data.shape)
@@ -579,6 +595,15 @@ class ExportGaussianSplat(Exporter):
         # dataparser_transform is applied before scaling
         input_transform = scale_transform @ dataparser_transform
 
+        if self.transform_to_colmap_coordinates:
+            self.write_transformed_ply(
+                data=data, positions=positions, scales=scales,
+                rotation_transform=dataparser_transform[:3, :3],
+                position_transform=input_transform,
+                scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
+                filename=self.output_dir / 'transformed.ply',
+            )
+
         with open(self.output_dir / "splat_info.json", "w") as f:
             json.dump({
                 # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
@@ -592,14 +617,6 @@ class ExportGaussianSplat(Exporter):
 
         export_frame_render(pipeline, self.output_dir / 'render.png', first_image_idx)
 
-        if self.transform_to_colmap_coordinates:
-            self.write_transformed_ply(
-                data=data, positions=positions, scales=scales,
-                rotation_transform=dataparser_transform[:3, :3],
-                position_transform=input_transform,
-                scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
-            )
-
     def write_transformed_ply(
         self,
         data: np.ndarray,
@@ -608,33 +625,56 @@ class ExportGaussianSplat(Exporter):
         rotation_transform: np.ndarray,
         position_transform: np.ndarray,
         scale_transform: float,
+        filename: str,
     ):
-        filename = self.output_dir / 'transformed.ply'
-        transformed_positions = np.linalg.inv(position_transform) @ np.concatenate([
+        inv_position_transform = np.linalg.inv(position_transform)
+        transformed_positions = inv_position_transform @ np.concatenate([
             positions,
             np.ones((positions.shape[0], 1)),
         ], axis=1).T
         data['x'] = transformed_positions[0]
         data['y'] = transformed_positions[1]
         data['z'] = transformed_positions[2]
+
         transformed_scales = torch.sigmoid(torch.from_numpy(scales))
         transformed_scales = (transformed_scales / scale_transform).T
         transformed_scales = torch.logit(transformed_scales).numpy()
         data['scale_0'] = transformed_scales[0]
         data['scale_1'] = transformed_scales[1]
         data['scale_2'] = transformed_scales[2]
-        rotation_transform = Quaternion(matrix=np.linalg.inv(rotation_transform), rtol=1e-05, atol=1e-06)
+
+        normals = np.array([data['nx'], data['ny'], data['nz']])
+        inv_rotation_transform = np.linalg.inv(rotation_transform)
+        transformed_normals = inv_rotation_transform @ normals
+        data['nx'] = transformed_normals[0]
+        data['ny'] = transformed_normals[1]
+        data['nz'] = transformed_normals[2]
+
+        quat_transform = Quaternion(matrix=rotation_transform, rtol=1e-05, atol=1e-06)
         for i in range(len(data['rot_0'])):
             quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
-            quat = rotation_transform * quat
+            quat = quat_transform * quat
             data['rot_0'][i] = quat[0]
             data['rot_1'][i] = quat[1]
             data['rot_2'][i] = quat[2]
             data['rot_3'][i] = quat[3]
+
         with open(filename, mode='wb') as f:
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)
-        CONSOLE.print(f'Wrote {filename}')
 
+    def estimate_normals(
+        self,
+        scales: np.ndarray,
+        quats: np.ndarray,
+    ) -> np.ndarray:
+        assert len(scales) == len(quats), "The length of 'scales' and 'quats' must be the same."
+    
+        scale_sorted_indices = np.argsort(scales)
+        smallest_scale_index = scale_sorted_indices[:, 0]
+    
+        normals = np.array([Quaternion(quat).rotation_matrix[:, index].astype(np.float32) for quat, index in zip(quats, smallest_scale_index)])
+    
+        return normals
 
 Commands = tyro.conf.FlagConversionOff[
     Union[
