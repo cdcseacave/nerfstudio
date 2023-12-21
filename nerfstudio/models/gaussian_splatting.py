@@ -265,9 +265,6 @@ class GaussianSplattingModel(Model):
         self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
         self.step = 0
         self.crop_box: Optional[OrientedBox] = None
-        # record camera positions
-        self.cameras_loaded = False
-        self.cameras = []
 
         self.early_stop_at_step: Optional[int] = None
         self.avg_loss = 1.0
@@ -703,21 +700,6 @@ class GaussianSplattingModel(Model):
             print("Called get_outputs with not a camera")
             return {}
         assert camera.shape[0] == 1, "Only one camera at a time"
-        # record the camera info for later
-        if not self.cameras_loaded:
-            add_cam = True
-            for cam in self.cameras:
-                cam_diff = np.linalg.norm((cam.camera_to_worlds - camera.camera_to_worlds).cpu().squeeze().numpy())
-                if cam_diff < 1e-6:
-                    add_cam = False
-                    break
-            if add_cam:
-                self.cameras.insert(1, camera)
-            self.cameras_loaded = self.step > 2 * self.num_train_data # Sometimes self.num_train_data is not accurate
-            if self.cameras_loaded:
-                print("Cameras loaded: " + str(len(self.cameras)) + " cameras, self.num_train_data = " + str(self.num_train_data))
-                for i in range(10): # Hack to make prior print line visible
-                    print("\n")
         # dont mutate the input
         camera = deepcopy(camera)
         if self.training:
@@ -746,7 +728,8 @@ class GaussianSplattingModel(Model):
         fovx = 2 * math.atan(camera.width / (2 * camera.fx))
         fovy = 2 * math.atan(camera.height / (2 * camera.fy))
         W, H = camera.width.item(), camera.height.item()
-        self.last_size = (H, W)
+        if self.training:
+            self.last_size = (H, W)
         projmat = projection_matrix(0.001, 1000, fovx, fovy).to(self.device)
         BLOCK_X, BLOCK_Y = 16, 16
         tile_bounds = (
@@ -765,7 +748,7 @@ class GaussianSplattingModel(Model):
         opacities_crop = self.opacities[crop_ids]
         means_crop = self.means[crop_ids]
         colors_crop = self.get_colors[crop_ids]
-        self.xys, depths, self.radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
             self.means[crop_ids],
             torch.exp(self.scales[crop_ids]),
             1,
@@ -782,8 +765,12 @@ class GaussianSplattingModel(Model):
         )
         # Important to allow xys grads to populate properly
         if self.training:
-            self.xys.retain_grad()
-        rend_mask = self.radii > 0
+            xys.retain_grad()
+        # Only save xys and radii if we're training
+        if self.training:
+            self.xys = xys
+            self.radii = radii
+        rend_mask = radii > 0
         if self.config.sh_degree > 0:
             viewdirs = means_crop[rend_mask].detach() - camera.camera_to_worlds[..., :3, 3]  # (N, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
@@ -798,9 +785,9 @@ class GaussianSplattingModel(Model):
             rgbs = self.get_colors.squeeze()[rend_mask]  # (N, 3)
             rgbs = torch.sigmoid(rgbs)
         rgb = RasterizeGaussians.apply(
-            self.xys[rend_mask],
+            xys[rend_mask],
             depths[rend_mask],
-            self.radii[rend_mask],
+            radii[rend_mask],
             conics[rend_mask],
             num_tiles_hit[rend_mask],
             rgbs,
@@ -813,9 +800,9 @@ class GaussianSplattingModel(Model):
             depth_im = None
         else:
             depth_im = RasterizeGaussians.apply(
-                self.xys[rend_mask],
+                xys[rend_mask],
                 depths[rend_mask],
-                self.radii[rend_mask],
+                radii[rend_mask],
                 conics[rend_mask],
                 num_tiles_hit[rend_mask],
                 depths[rend_mask, None].repeat(1, 3),
@@ -826,8 +813,8 @@ class GaussianSplattingModel(Model):
             )[..., 0:1]
         # At the end of training, remove gaussians that are only seen by 1 camera -> keep track of count
         ending_step = self.early_stop_at_step or self.config.max_iterations
-        if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= ending_step - len(self.cameras):
-            if self.step == ending_step - len(self.cameras):
+        if self.training and self.config.remove_gaussians_min_cameras_in_fov > 0 and self.step >= ending_step - self.num_train_data:
+            if self.step == ending_step - self.num_train_data:
                 self.gaussians_camera_cnt = torch.nn.Parameter(torch.zeros(self.num_points, 1, device=self.device))
             assert self.num_points == len(self.gaussians_camera_cnt)
             with torch.no_grad():
