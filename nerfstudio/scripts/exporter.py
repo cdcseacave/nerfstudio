@@ -701,8 +701,8 @@ class ExportGaussianSplat(Exporter):
         focus = np.zeros(3)
         # Average distance from each camera to the focus point.
         avg_distance = np.mean([np.linalg.norm(t[:3, 3] - focus) for t in camera_transforms])
-        # Back up each camera by 0.5x the average distance.
-        new_positions = [t @ np.array([0, 0, avg_distance * 0.5, 1]) for t in camera_transforms]
+        # Back up each camera by 0.25x the average distance.
+        new_positions = [t @ np.array([0, 0, avg_distance * 0.25, 1]) for t in camera_transforms]
         # Average the new positions together, maintaining distance to the focus.
         new_position = self.average_position(new_positions, focus)
 
