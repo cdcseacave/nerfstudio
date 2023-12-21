@@ -20,6 +20,7 @@ Script for exporting NeRF into other formats.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -35,10 +36,14 @@ import torch
 import tyro
 from typing_extensions import Annotated, Literal
 
+from nerfstudio.cameras import camera_utils
+from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
-from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager
+from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager, FullImageDatamanagerConfig
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
+from nerfstudio.data.dataparsers.colmap_dataparser import ColmapDataParserConfig
+from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
@@ -486,6 +491,9 @@ class ExportGaussianSplat(Exporter):
     load_step: Optional[int] = None
     transform_to_colmap_coordinates: bool = False
 
+    thumbnail_size: int = 512
+    thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
+
     def main(self) -> None:
         if self.output_dir is None:
             self.output_dir = self.load_config.parent
@@ -493,7 +501,10 @@ class ExportGaussianSplat(Exporter):
             self.output_dir.mkdir(parents=True)
 
         def update_config_callback(config: TrainerConfig):
+            assert isinstance(config.pipeline.datamanager, FullImageDatamanagerConfig)
+            assert isinstance(config.pipeline.datamanager.dataparser, ColmapDataParserConfig)
             config.pipeline.datamanager.dataparser.load_3D_points = False
+            config.pipeline.datamanager.cache_images = 'no-cache'
             config.load_step = self.load_step
             return config
 
@@ -562,8 +573,7 @@ class ExportGaussianSplat(Exporter):
             json.dump(frames_json, f)
         CONSOLE.print(f'Wrote {self.output_dir / "frames.json"}')
 
-        first_image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
-            min(pipeline.datamanager.train_dataset.image_filenames))
+        initial_camera_transform = self.get_initial_camera_transform(pipeline.datamanager)
 
         scale_transform = np.eye(4)
         scale_transform[:3, :3] *= pipeline.datamanager.train_dataparser_outputs.dataparser_scale
@@ -577,7 +587,7 @@ class ExportGaussianSplat(Exporter):
         with open(self.output_dir / "splat_info.json", "w") as f:
             json.dump({
                 # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
-                'initialCameraTransform': frames_json[0]['transform'],
+                'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
                 # Transformation matrix applied to colmap poses to convert them to the same
                 # coordinate system as the output splats.
                 'inputTransform': input_transform.ravel('F').tolist(),
@@ -586,8 +596,20 @@ class ExportGaussianSplat(Exporter):
         CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
 
         with torch.no_grad():
-            cameras = pipeline.datamanager.train_dataset.cameras[first_image_idx:first_image_idx+1]
-            output = model.get_outputs(cameras.to(model.device))['rgb'].cpu()
+            fov = math.radians(self.thumbnail_fov)
+            w = h = self.thumbnail_size
+            cx = cy = w / 2.
+            fx = fy = cx / math.tan(fov / 2)
+            thumbnail_camera = Cameras(
+                camera_to_worlds=torch.from_numpy(initial_camera_transform[:3]).to(torch.float32),
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                width=w,
+                height=h,
+            )
+            output = model.get_outputs(thumbnail_camera.reshape((1,)).to(model.device))['rgb'].cpu()
         mediapy.write_image(self.output_dir / 'render.png', output)
         CONSOLE.print(f'Wrote {self.output_dir / "render.png"}')
 
@@ -665,6 +687,45 @@ class ExportGaussianSplat(Exporter):
                           'Not writing distortion params to frames.json.')
 
         return frames
+
+    def get_initial_camera_transform(self, datamanager: FullImageDatamanager) -> np.array:
+        assert isinstance(datamanager.train_dataset, InputDataset)
+        first_few_image_idx = sorted(
+            range(len(datamanager.train_dataset.image_filenames)),
+            key=lambda i: datamanager.train_dataset.image_filenames[i],
+        )[:10]
+        cameras = [datamanager.train_dataset.cameras[i] for i in first_few_image_idx]
+        camera_transforms = [camera.camera_to_worlds.numpy() for camera in cameras]
+
+        # We use --center_method="focus", so the origin of the coordinate system is the focus.
+        focus = np.zeros(3)
+        # Average distance from each camera to the focus point.
+        avg_distance = np.mean([np.linalg.norm(t[:3, 3] - focus) for t in camera_transforms])
+        # Back up each camera by 0.25x the average distance.
+        new_positions = [t @ np.array([0, 0, avg_distance * 0.25, 1]) for t in camera_transforms]
+        # Average the new positions together, maintaining distance to the focus.
+        new_position = self.average_position(new_positions, focus)
+
+        # Point the camera in the same direction as the average camera, while aligning the up direction with the world.
+        # (Z-axis points behind the camera in the camera's coordinate frame and up in the world's coordinate frame.)
+        new_z = np.mean([t[:3, 2] for t in camera_transforms], axis=0)
+        new_z /= np.linalg.norm(new_z)
+        new_x = np.cross(np.array([0, 0, 1]), new_z)
+        new_x /= np.linalg.norm(new_x)
+        new_y = np.cross(new_z, new_x)
+
+        new_transform = np.vstack([
+            np.stack([new_x, new_y, new_z, new_position], axis=1),
+            np.array([0, 0, 0, 1]),
+        ])
+
+        return new_transform
+
+    def average_position(self, positions: np.array, focus: np.array) -> np.array:
+        avg_distance = np.mean([np.linalg.norm(p - focus) for p in positions])
+        avg_direction = np.mean([p - focus for p in positions], axis=0)
+        avg_direction /= np.linalg.norm(avg_direction)
+        return focus + avg_direction * avg_distance
 
 
 Commands = tyro.conf.FlagConversionOff[

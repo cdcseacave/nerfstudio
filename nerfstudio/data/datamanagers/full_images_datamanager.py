@@ -118,6 +118,8 @@ class FullImageDatamanager(DataManager, Generic[TDataset]):
         super().__init__()
 
     def cache_images(self, cache_images_option):
+        if cache_images_option == 'no-cache':
+            return [], []
         cached_train = []
         CONSOLE.log("Caching / undistorting train images")
         for i in tqdm(range(len(self.train_dataset)), leave=False):
