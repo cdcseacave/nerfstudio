@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type, Union
-from pyquaternion import Quaternion
 
 import torch
 from torch.nn import Parameter
@@ -33,6 +32,7 @@ from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.models.base_model import Model, ModelConfig
+from nerfstudio.utils.math import quaternion_from_normal
 import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -177,18 +177,31 @@ class GaussianSplattingModel(Model):
 
     def init_scale_rotation(
         self, points: torch.Tensor, normals: Optional[torch.Tensor] = None
-    ) -> [torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        num_points = points.shape[0]
         distances, _ = self.k_nearest_sklearn(points, 3)
         distances = torch.from_numpy(distances)
         # find the average of the three nearest neighbors for each point and use that as the scale
         avg_dist = distances.mean(dim=-1, keepdim=True)
-        scales = torch.log(avg_dist.repeat(1, 3))
         if normals is None:
             # use random initialization of the covariance
-            quats = random_quat_tensor(self.num_points)
+            print(f"Initializing {num_points} splats")
+            scales = torch.log(avg_dist.repeat(1, 3))
+            quats = random_quat_tensor(num_points)
         else:
             # use the normals to initialize the covariance
-            quats = torch.from_numpy(np.array([Quaternion(axis=n, radians=np.pi).q.astype(np.float32) for n in normals.cpu().numpy()]))
+            print(f"Initializing {num_points} splats with normals")
+            scales = torch.log(torch.cat(
+                [
+                    torch.ones((num_points, 1)) * (1.0 / self.config.max_gauss_ratio),
+                    avg_dist,
+                    avg_dist,
+                ],
+                dim=-1,
+            ))
+            quats = torch.from_numpy(
+                np.array([quaternion_from_normal(n).q.astype(np.float32) for n in normals.cpu().numpy()])
+            )
         return scales, quats
 
     def add_init_sphere_pts(self):
@@ -215,11 +228,12 @@ class GaussianSplattingModel(Model):
         self.scales       = torch.nn.Parameter(torch.cat([self.scales.detach(),     sphere_scales],     dim=0))
         self.opacities    = torch.nn.Parameter(torch.cat([self.opacities.detach(),  sphere_opacities],  dim=0))
         self.quats        = torch.nn.Parameter(torch.cat([self.quats.detach(),      sphere_quats],      dim=0))
-        print(f"Initialized {self.config.init_pts_sphere_num} gaussian splats on a sphere with radius {self.outer_sphere_rad}")
+        print(f"Initialized {self.config.init_pts_sphere_num} splats on a sphere with radius {self.outer_sphere_rad}")
 
     def populate_modules(self):
         self.xys_grad_norm = None
         self.max_2Dsize = None
+
         dim_sh = num_sh_bases(self.config.sh_degree)
         # self.seed_pts contains (Location, Color, Normal)
         if self.seed_pts is not None and not self.config.random_init:
@@ -231,11 +245,12 @@ class GaussianSplattingModel(Model):
             shs[:, 1:, 3:] = 0.0
             self.colors_all = torch.nn.Parameter(shs)
         else:
-            points = (torch.rand((500000, 3), dtype=torch.float) - 0.5) * 10
+            num_points = 500000
+            points = (torch.rand((num_points, 3), dtype=torch.float) - 0.5) * 10
             scales, quats = self.init_scale_rotation(points)
-            colors = torch.rand(self.num_points, 1, 3)
-            shs_rest = torch.zeros((self.num_points, dim_sh - 1, 3))
-            shs = torch.cat([colors, shs_rest], dim=1, dtype=torch.float)
+            colors = torch.rand((num_points, 1, 3), dtype=torch.float)
+            shs_rest = torch.zeros((num_points, dim_sh - 1, 3), dtype=torch.float)
+            shs = torch.cat([colors, shs_rest], dim=1)
 
         self.means = torch.nn.Parameter(points)
         self.scales = torch.nn.Parameter(scales)
@@ -259,6 +274,7 @@ class GaussianSplattingModel(Model):
         self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
             num_cameras=self.num_train_data, device="cpu"
         )
+        print(f"Initialized {self.num_points} splats with SH degree {self.config.sh_degree}")
 
     @property
     def colors(self):

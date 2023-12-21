@@ -19,6 +19,7 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from scipy import stats
+from pyquaternion import Quaternion
 from typing import Literal, Tuple
 
 import torch
@@ -522,7 +523,6 @@ def generate_polyhedron_basis(
     return basis
 
 
-
 def compute_statistics(
     values: np.ndarray,
     header: str = "Statistics:",
@@ -541,3 +541,35 @@ def compute_statistics(
     print(header)
     print(f"\tMin: {min_val}, Mean: {mean_val}, Median: {median_val}, Max: {max_val}")
     print(f"\tStd-dev: {std_dev_val}, Variance: {variance_val}, Skewness: {skewness_val}, Kurtosis: {kurtosis_val}")
+
+
+def quaternion_from_normal(normal, up_direction=np.array([1.0, 0.0, 0.0])):
+    """
+    Generate a quaternion from a normal vector, assuming a certain 'up' direction.
+    For ex if the 'up' direction is [1.0, 0.0, 0.0], then the normal will be the first column of the rotation matrix.
+    Args:
+        normal (numpy.ndarray): The normal vector.
+        up_direction (numpy.ndarray): The normalized 'up' direction, default is [1.0, 0.0, 0.0].
+    Returns:
+        Quaternion: The quaternion representing the rotation.
+    """
+    # Normalize the input vectors
+    normal = normal / np.linalg.norm(normal)
+
+    # Compute the axis of rotation (cross product)
+    axis = np.cross(up_direction, normal)
+
+    # Compute the cosine of the angle (dot product)
+    cos_angle = np.dot(up_direction, normal)
+
+    # Compute the angle
+    angle = np.arccos(cos_angle)
+
+    # Create the quaternion
+    if np.linalg.norm(axis) != 0:
+        # Normal case
+        quat = Quaternion(axis=axis, angle=angle)
+    else:
+        # The normal and up_direction are parallel
+        quat = Quaternion(axis=[0, 0, 1], angle=0 if cos_angle > 0 else np.pi)
+    return quat
