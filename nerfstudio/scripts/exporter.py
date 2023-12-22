@@ -636,12 +636,10 @@ class ExportGaussianSplat(Exporter):
         data['y'] = transformed_positions[1]
         data['z'] = transformed_positions[2]
 
-        transformed_scales = torch.sigmoid(torch.from_numpy(scales))
-        transformed_scales = (transformed_scales / scale_transform).T
-        transformed_scales = torch.logit(transformed_scales).numpy()
-        data['scale_0'] = transformed_scales[0]
-        data['scale_1'] = transformed_scales[1]
-        data['scale_2'] = transformed_scales[2]
+        transformed_scales = np.log(np.exp(scales) / scale_transform)
+        data['scale_0'] = transformed_scales[:, 0]
+        data['scale_1'] = transformed_scales[:, 1]
+        data['scale_2'] = transformed_scales[:, 2]
 
         normals = np.array([data['nx'], data['ny'], data['nz']])
         inv_rotation_transform = np.linalg.inv(rotation_transform)
@@ -661,6 +659,7 @@ class ExportGaussianSplat(Exporter):
 
         with open(filename, mode='wb') as f:
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)
+        CONSOLE.print(f'Wrote {filename}')
 
     def estimate_normals(
         self,

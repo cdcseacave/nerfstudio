@@ -542,20 +542,36 @@ def compute_statistics(
     print(f"\tMin: {min_val}, Mean: {mean_val}, Median: {median_val}, Max: {max_val}")
     print(f"\tStd-dev: {std_dev_val}, Variance: {variance_val}, Skewness: {skewness_val}, Kurtosis: {kurtosis_val}")
 
+def quaternion_to_rotation(quat):
+    """
+    Convert a quaternion into a rotation matrix using pyquaternion format,
+    which uses scalar-first format (w x y z).
+    Args:
+        quat (numpy.ndarray): The quaternion to convert.
+    Returns:
+        numpy.ndarray: The rotation matrix.
+    """
+    # Normalize the quaternion
+    s = 1.0 / np.linalg.norm(quat)
+    w, x, y, z = quat[0] * s, quat[1] * s, quat[2] * s, quat[3] * s
 
-def quaternion_from_normal(normal, up_direction=np.array([1.0, 0.0, 0.0])):
+    # Construct the rotation matrix
+    return np.array([
+        [1.0 - 2.0 * (y**2 + z**2), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
+        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x**2 + z**2), 2.0 * (y * z - w * x)],
+        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x**2 + y**2)]
+    ])
+
+def quaternion_from_vectors(normal, up_direction=np.array([1.0, 0.0, 0.0])):
     """
     Generate a quaternion from a normal vector, assuming a certain 'up' direction.
     For ex if the 'up' direction is [1.0, 0.0, 0.0], then the normal will be the first column of the rotation matrix.
     Args:
-        normal (numpy.ndarray): The normal vector.
+        normal (numpy.ndarray): The normalized normal vector.
         up_direction (numpy.ndarray): The normalized 'up' direction, default is [1.0, 0.0, 0.0].
     Returns:
         Quaternion: The quaternion representing the rotation.
     """
-    # Normalize the input vectors
-    normal = normal / np.linalg.norm(normal)
-
     # Compute the axis of rotation (cross product)
     axis = np.cross(up_direction, normal)
 

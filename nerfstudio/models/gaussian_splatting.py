@@ -32,7 +32,7 @@ from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.models.base_model import Model, ModelConfig
-from nerfstudio.utils.math import quaternion_from_normal
+from nerfstudio.utils.math import quaternion_from_vectors
 import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -193,14 +193,14 @@ class GaussianSplattingModel(Model):
             print(f"Initializing {num_points} splats with normals")
             scales = torch.log(torch.cat(
                 [
-                    torch.ones((num_points, 1)) * (1.0 / self.config.max_gauss_ratio),
+                    avg_dist * (1.0 / self.config.max_gauss_ratio),
                     avg_dist,
                     avg_dist,
                 ],
                 dim=-1,
             ))
             quats = torch.from_numpy(
-                np.array([quaternion_from_normal(n).q.astype(np.float32) for n in normals.cpu().numpy()])
+                np.array([quaternion_from_vectors(n).q.astype(np.float32) for n in normals.cpu().numpy()])
             )
         return scales, quats
 

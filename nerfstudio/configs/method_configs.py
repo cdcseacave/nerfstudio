@@ -609,7 +609,7 @@ method_configs["gaussian-splatting"] = TrainerConfig(
     gradient_accumulation_steps={"camera_opt": 100, "color": 2},
     pipeline=VanillaPipelineConfig(
         datamanager=FullImageDatamanagerConfig(
-            dataparser=ColmapDataParserConfig(load_3D_points=True),
+            dataparser=ColmapDataParserConfig(load_3D_points=True, orientation_method="none"),
         ),
         model=GaussianSplattingModelConfig(),
     ),
