@@ -33,7 +33,6 @@ from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttrib
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.math import quaternion_from_vectors
-from nerfstudio.utils.rich_utils import CONSOLE
 import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -498,7 +497,7 @@ class GaussianSplattingModel(Model):
         self.colors_all = Parameter(self.colors_all[~culls].detach())
         self.opacities = Parameter(self.opacities[~culls].detach())
 
-        CONSOLE.log(
+        print(
             f"Culled {n_bef - self.num_points} gaussians "
             f"({below_alpha_count} below alpha thresh, {self.num_points} remaining)"
         )
@@ -510,7 +509,7 @@ class GaussianSplattingModel(Model):
         """
 
         n_splits = split_mask.sum().item()
-        CONSOLE.log(f"Splitting {split_mask.sum().item()/self.num_points} gaussians: {n_splits}/{self.num_points}")
+        print(f"Splitting {split_mask.sum().item()/self.num_points} gaussians: {n_splits}/{self.num_points}")
         centered_samples = torch.randn((samps * n_splits, 3), device=self.device)  # Nx3 of axis-aligned scales
         scaled_samples = (
             torch.exp(self.scales[split_mask].repeat(samps, 1)) * centered_samples
@@ -536,7 +535,7 @@ class GaussianSplattingModel(Model):
         This function duplicates gaussians that are too small
         """
         n_dups = dup_mask.sum().item()
-        CONSOLE.log(f"Duplicating {dup_mask.sum().item()/self.num_points} gaussians: {n_dups}/{self.num_points}")
+        print(f"Duplicating {dup_mask.sum().item()/self.num_points} gaussians: {n_dups}/{self.num_points}")
         dup_means = self.means[dup_mask]
         dup_colors = self.colors_all[dup_mask]
         dup_opacities = self.opacities[dup_mask]
