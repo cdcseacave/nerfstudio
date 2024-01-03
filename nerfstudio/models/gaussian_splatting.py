@@ -33,6 +33,7 @@ from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttrib
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.math import quaternion_from_vectors
+from nerfstudio.utils.rich_utils import CONSOLE
 import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -389,6 +390,7 @@ class GaussianSplattingModel(Model):
             with torch.no_grad():
                 # only split/cull if we've seen every image since opacity reset
                 reset_interval = self.config.reset_alpha_every * self.config.refine_every
+                splits_mask = None
                 if (
                     self.step < self.config.stop_split_at
                     and self.step % reset_interval > self.num_train_data + self.config.refine_every
@@ -440,26 +442,48 @@ class GaussianSplattingModel(Model):
                     for group, param in param_groups.items():
                         self.dup_in_optim(optimizers.optimizers[group], dup_idcs, param, 1)
 
+                    # After a guassian is split into two new gaussians, the original one should also be pruned.
+                    splits_mask = torch.cat(
+                        (splits, torch.zeros(nsamps * splits.sum() + dups.sum(), device=self.device, dtype=torch.bool))
+                    )
+
                 # Offset all the opacity reset logic by refine_every so that we don't
                 # save checkpoints right when the opacity is reset (saves every 2k)
                 if self.step % reset_interval > self.num_train_data + self.config.refine_every:
-                    # then cull
-                    deleted_mask = self.cull_gaussians()
+                    deleted_mask = self.cull_gaussians(splits_mask)
                     param_groups = self.get_gaussian_param_groups()
                     for group, param in param_groups.items():
                         self.remove_from_optim(optimizers.optimizers[group], deleted_mask, param)
+                    torch.cuda.empty_cache()
+
+                if self.step % reset_interval == self.config.refine_every:
+                    # Reset value is set to under the cull_alpha_thresh
+                    reset_value = self.config.cull_alpha_thresh * 0.8
+                    self.opacities.data = torch.clamp(
+                        self.opacities.data, max=torch.logit(torch.tensor(reset_value, device=self.device)).item()
+                    )
+                    # reset the exp of optimizer
+                    optim = optimizers.optimizers["opacity"]
+                    param = optim.param_groups[0]["params"][0]
+                    param_state = optim.state[param]
+                    param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+                    param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
 
                 self.xys_grad_norm = None
                 self.vis_counts = None
                 self.max_2Dsize = None
 
-    def cull_gaussians(self):
+    def cull_gaussians(self, extra_cull_mask: Optional[torch.Tensor] = None):
         """
         This function deletes gaussians with under a certain opacity threshold
+        extra_cull_mask: a mask indicates extra gaussians to cull besides existing culling criterion
         """
         n_bef = self.num_points
         # cull transparent ones
         culls = (torch.sigmoid(self.opacities) < self.config.cull_alpha_thresh).squeeze()
+        below_alpha_count = torch.sum(culls).item()
+        if extra_cull_mask is not None:
+            culls = culls | extra_cull_mask
         if self.step > self.config.refine_every * self.config.reset_alpha_every:
             # cull huge ones
             toobigs = (torch.exp(self.scales).max(dim=-1).values > self.config.cull_scale_thresh).squeeze()
@@ -474,7 +498,10 @@ class GaussianSplattingModel(Model):
         self.colors_all = Parameter(self.colors_all[~culls].detach())
         self.opacities = Parameter(self.opacities[~culls].detach())
 
-        print(f"Culled {n_bef - self.num_points} gaussians")
+        CONSOLE.log(
+            f"Culled {n_bef - self.num_points} gaussians "
+            f"({below_alpha_count} below alpha thresh, {self.num_points} remaining)"
+        )
         return culls
 
     def split_gaussians(self, split_mask, samps):
@@ -483,7 +510,7 @@ class GaussianSplattingModel(Model):
         """
 
         n_splits = split_mask.sum().item()
-        print(f"Splitting {split_mask.sum().item()/self.num_points} gaussians: {n_splits}/{self.num_points}")
+        CONSOLE.log(f"Splitting {split_mask.sum().item()/self.num_points} gaussians: {n_splits}/{self.num_points}")
         centered_samples = torch.randn((samps * n_splits, 3), device=self.device)  # Nx3 of axis-aligned scales
         scaled_samples = (
             torch.exp(self.scales[split_mask].repeat(samps, 1)) * centered_samples
@@ -509,7 +536,7 @@ class GaussianSplattingModel(Model):
         This function duplicates gaussians that are too small
         """
         n_dups = dup_mask.sum().item()
-        print(f"Duplicating {dup_mask.sum().item()/self.num_points} gaussians: {n_dups}/{self.num_points}")
+        CONSOLE.log(f"Duplicating {dup_mask.sum().item()/self.num_points} gaussians: {n_dups}/{self.num_points}")
         dup_means = self.means[dup_mask]
         dup_colors = self.colors_all[dup_mask]
         dup_opacities = self.opacities[dup_mask]
@@ -608,7 +635,7 @@ class GaussianSplattingModel(Model):
         R = camera.camera_to_worlds[0, :3, :3]  # 3 x 3
         T = camera.camera_to_worlds[0, :3, 3:4]  # 3 x 1
         # flip the z and y axes to align with gsplat conventions
-        R_edit = torch.diag(torch.tensor([1, -1, -1], device="cuda", dtype=R.dtype))
+        R_edit = torch.diag(torch.tensor([1, -1, -1], device=self.device, dtype=R.dtype))
         R = R @ R_edit
         # analytic matrix inverse to get world2camera matrix
         R_inv = R.T
@@ -684,6 +711,7 @@ class GaussianSplattingModel(Model):
             W,
             background,
         )
+        rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         if self.training:
             # Only save xys and radii if we're training
             self.xys = xys

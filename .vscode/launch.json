@@ -44,12 +44,26 @@
       "request": "launch",
       "program": "nerfstudio/scripts/train.py",
       "console": "integratedTerminal",
+      "justMyCode": false,
       "args": [
         "gaussian-splatting",
         "--experiment-name", "gsplats",
         "colmap", "--colmap_path", "sparse/0",
         "--train-split-fraction", "1.0",
-        "--data", "data/Rocket_Center__Jet_Engine"
+        "--data", "data/ball/colmap/dense"
+      ]
+    },
+    {
+      "name": "Python: export gs",
+      "type": "python",
+      "request": "launch",
+      "program": "nerfstudio/scripts/exporter.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args": [
+        "gaussian-splat",
+        "--transform-to-colmap-coordinates", "True",
+        "--load-config", "outputs/gsplats/gaussian-splatting/2023-12-21_083526/config.yml"
       ]
     },
     {
