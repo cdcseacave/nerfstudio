@@ -23,6 +23,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
+from copy import deepcopy
 
 import mediapy
 import numpy as np
@@ -356,7 +357,12 @@ def export_frame_render(pipeline: Pipeline, output_path: Path, image_idx: int = 
             min(pipeline.datamanager.train_dataset.image_filenames))
 
     with torch.no_grad():
+        data = deepcopy(pipeline.datamanager.cached_train[image_idx])
+        data["image"] = data["image"].to(pipeline.model.device)
         cameras = pipeline.datamanager.train_dataset.cameras[image_idx:image_idx+1]
-        output = pipeline.model.get_outputs(cameras.to(pipeline.model.device))['rgb'].cpu()
-    mediapy.write_image(output_path, output)
-    CONSOLE.print(f'Wrote {output_path}')
+        outputs = pipeline.model.get_outputs(cameras.to(pipeline.model.device))
+        rgb = outputs['rgb'].cpu()
+        metrics = pipeline.model.get_metrics_dict(outputs, data)
+        psnr = metrics['psnr'].cpu()
+    mediapy.write_image(output_path, rgb)
+    CONSOLE.print(f'Wrote image {image_idx} with {psnr:.2f} PSNR at {output_path}')
