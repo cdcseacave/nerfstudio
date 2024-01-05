@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
+import subprocess
 import yaml
 
 from nerfstudio.configs.base_config import (
@@ -100,10 +101,13 @@ class ExperimentConfig(InstantiateConfig):
     def is_comet_enabled(self) -> bool:
         return ("comet" == self.vis) | ("viewer+comet" == self.vis)
 
-    def set_timestamp(self) -> None:
+    def set_timestamp(self, add_commit_id: bool = True) -> None:
         """Dynamically set the experiment timestamp"""
         if self.timestamp == "{timestamp}":
             self.timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            if add_commit_id:
+                commit_id = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode('utf-8')  # get the current Git commit ID
+                self.timestamp = f"{commit_id}-{self.timestamp}"
 
     def set_experiment_name(self) -> None:
         """Dynamically set the experiment name"""
