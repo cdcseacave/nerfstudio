@@ -251,6 +251,7 @@ class VanillaPipeline(Pipeline):
         world_size: int = 1,
         local_rank: int = 0,
         grad_scaler: Optional[GradScaler] = None,
+        base_dir: str = "",
     ):
         super().__init__()
         self.config = config
@@ -283,6 +284,7 @@ class VanillaPipeline(Pipeline):
             device=device,
             grad_scaler=grad_scaler,
             seed_points=seed_pts,
+            base_dir=base_dir,
         )
         self.model.to(device)
 

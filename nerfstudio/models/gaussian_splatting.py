@@ -173,6 +173,10 @@ class GaussianSplattingModel(Model):
             self.seed_pts = kwargs["seed_points"]
         else:
             self.seed_pts = None
+        if "base_dir" in kwargs:
+            self.base_dir = kwargs["base_dir"]
+        else:
+            self.base_dir = None
         super().__init__(*args, **kwargs)
 
     def init_scale_rotation(
