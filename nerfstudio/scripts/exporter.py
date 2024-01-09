@@ -42,8 +42,8 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
 from nerfstudio.exporter.exporter_utils import collect_camera_poses, export_frame_render, generate_point_cloud, get_mesh_from_filename
 from nerfstudio.exporter.marching_cubes import generate_mesh_with_multires_marching_cubes
-from nerfstudio.fields.sdf_field import SDFField
-from nerfstudio.models.gaussian_splatting import GaussianSplattingModel, SH2RGB
+from nerfstudio.fields.sdf_field import SDFField  # noqa
+from nerfstudio.models.gaussian_splatting import GaussianSplattingModel, RGB2SH, SH2RGB
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
@@ -536,13 +536,10 @@ class ExportGaussianSplat(Exporter):
 
             data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
 
-            colors = model.colors_all.cpu().numpy()
             scales = model.scales.cpu().numpy()
             quats = model.quats.cpu().numpy()
 
-        sh_coefficients = colors.shape[1]
-        sh_deg = int(np.sqrt(sh_coefficients)) - 1
-        CONSOLE.print(f'Exporting {positions.shape[0]} splats with SH degree {sh_deg}')
+        n = positions.shape[0]
 
         data['x'] = positions[:, 0]
         data['y'] = positions[:, 1]
@@ -553,17 +550,29 @@ class ExportGaussianSplat(Exporter):
         data['ny'] = normals[:, 1]
         data['nz'] = normals[:, 2]
 
-        data['red']   = (SH2RGB(colors[:, 0, 0].reshape(data.shape)) * 255.0).astype(np.uint8)
-        data['green'] = (SH2RGB(colors[:, 0, 1].reshape(data.shape)) * 255.0).astype(np.uint8)
-        data['blue']  = (SH2RGB(colors[:, 0, 2].reshape(data.shape)) * 255.0).astype(np.uint8)
+        if model.config.sh_degree > 0:
+            shs_0 = model.shs_0.contiguous().cpu().numpy()
+            for i in range(shs_0.shape[1]):
+                data[f"f_dc_{i}"] = shs_0[:, i, None]
 
-        data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
-        data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
-        data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
-        sh_count = min(sh_coefficients, 16) - 1
-        for c in range(3):
-            for i in range(sh_count):
-                data[f'f_rest_{c * sh_count + i}'] = colors[:, i + 1, c].reshape(data.shape)
+            # transpose(1, 2) was needed to match the sh order in Inria version
+            shs_rest = model.shs_rest.transpose(1, 2).contiguous().cpu().numpy()
+            shs_rest = shs_rest.reshape((n, -1))
+            for i in range(shs_rest.shape[-1]):
+                data[f"f_rest_{i}"] = shs_rest[:, i, None]
+
+            sh_coefficients = shs_rest.shape[-1] + 3
+            sh_deg = int(np.sqrt(sh_coefficients)) - 1
+            CONSOLE.print(f'Exporting {positions.shape[0]} splats with SH degree {sh_deg}')
+        else:
+            colors = torch.clamp(RGB2SH(model.colors.clone()), 0.0, 1.0).data.cpu().numpy()
+            data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
+            data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
+            data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
+
+        data['red']   = (SH2RGB(data['f_dc_0']) * 255.0).astype(np.uint8)
+        data['green'] = (SH2RGB(data['f_dc_1']) * 255.0).astype(np.uint8)
+        data['blue']  = (SH2RGB(data['f_dc_2']) * 255.0).astype(np.uint8)
 
         data['scale_0'] = scales[:, 0].reshape(data.shape)
         data['scale_1'] = scales[:, 1].reshape(data.shape)
