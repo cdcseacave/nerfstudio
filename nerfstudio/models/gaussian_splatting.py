@@ -157,7 +157,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     """
     scale_lambda: float = 0.01 # Weight of scale loss
     cull_visibility_thresh: float = 0.01 # threshold of visibility for culling gaussians
-    visibility_lambda: float = 0.001 # Weight of visibility loss
+    visibility_lambda: float = 0.0001 # Weight of visibility loss
     init_pts_sphere_num: int = 20000 # Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable
     init_pts_sphere_rad_pct: float = 0.98 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
     init_pts_sphere_rad_mult: float = 1.1 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value
@@ -238,7 +238,7 @@ class GaussianSplattingModel(Model):
         sphere_shs_0      = torch.rand(self.config.init_pts_sphere_num, 3).to(self.features_dc.device)
         sphere_shs_rest   = torch.zeros((self.config.init_pts_sphere_num, dim_sh - 1, 3)).to(self.features_rest.device)
         sphere_opacities  = torch.logit(0.1 * torch.ones(self.config.init_pts_sphere_num, 1)).to(self.opacities.device)
-        sphere_visibility = torch.logit(torch.ones(self.config.init_pts_sphere_num, 1)).to(self.visibility.device)
+        sphere_visibility = torch.logit(0.99 * torch.ones(self.config.init_pts_sphere_num, 1)).to(self.visibility.device)
         # Add to model
         self.means        = torch.nn.Parameter(torch.cat([self.means.detach(),      sphere_pts],        dim=0))
         self.scales       = torch.nn.Parameter(torch.cat([self.scales.detach(),     sphere_scales],     dim=0))
@@ -278,7 +278,7 @@ class GaussianSplattingModel(Model):
         self.scales = torch.nn.Parameter(scales)
         self.quats = torch.nn.Parameter(quats)
         self.opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1)))
-        self.visibility = torch.nn.Parameter(torch.logit(torch.ones(self.num_points, 1)))
+        self.visibility = torch.nn.Parameter(torch.logit(0.99 * torch.ones(self.num_points, 1)))
 
         # Init outer sphere dimensions & points
         if self.config.init_pts_sphere_num > 0 and self.training:
@@ -512,18 +512,18 @@ class GaussianSplattingModel(Model):
             if deleted_mask is not None:
                 self.remove_from_all_optim(optimizers, deleted_mask)
 
-            # if self.step < self.config.stop_split_at and self.step % reset_interval == self.config.refine_every:
-            #     # Reset value is set to be twice of the cull_alpha_thresh
-            #     reset_value = self.config.cull_alpha_thresh * 2.0
-            #     self.opacities.data = torch.clamp(
-            #         self.opacities.data, max=torch.logit(torch.tensor(reset_value, device=self.device)).item()
-            #     )
-            #     # reset the exp of optimizer
-            #     optim = optimizers.optimizers["opacity"]
-            #     param = optim.param_groups[0]["params"][0]
-            #     param_state = optim.state[param]
-            #     param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
-            #     param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+            if self.step < self.config.stop_split_at and self.step % reset_interval == self.config.refine_every:
+                # Reset value is set to be twice of the cull_alpha_thresh
+                reset_value = self.config.cull_alpha_thresh * 2.0
+                self.opacities.data = torch.clamp(
+                    self.opacities.data, max=torch.logit(torch.tensor(reset_value, device=self.device)).item()
+                )
+                # reset the exp of optimizer
+                optim = optimizers.optimizers["opacity"]
+                param = optim.param_groups[0]["params"][0]
+                param_state = optim.state[param]
+                param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+                param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
 
             self.xys_grad_norm = None
             self.vis_counts = None
@@ -538,9 +538,12 @@ class GaussianSplattingModel(Model):
         # cull transparent ones
         culls = (torch.sigmoid(self.weighted_opacities()) < self.config.cull_alpha_thresh).squeeze()
         below_alpha_count = torch.sum(culls).item()
-        visibility_culls = (torch.sigmoid(self.visibility) <= self.config.cull_visibility_thresh).squeeze()
-        below_visibility_count = torch.sum(visibility_culls).item()
-        culls = culls | visibility_culls
+        if self.config.visibility_lambda:
+            visibility_culls = (torch.sigmoid(self.visibility) <= self.config.cull_visibility_thresh).squeeze()
+            below_visibility_count = torch.sum(visibility_culls).item()
+            culls = culls | visibility_culls
+        else:
+            below_visibility_count = 0
         if extra_cull_mask is not None:
             culls = culls | extra_cull_mask
         toobigs_count = 0
@@ -623,16 +626,20 @@ class GaussianSplattingModel(Model):
         return visibility_weight
 
     def weighted_scales(self, visibility_weight: Optional[torch.Tensor] = None, scales: Optional[torch.Tensor] = None):
+        scales = (self.scales if scales is None else scales)
+        if self.config.visibility_lambda <= 0:
+            return scales
         if visibility_weight is None:
             visibility_weight = self.visibility_weights()
-        scales = (self.scales if scales is None else scales) * visibility_weight
-        return scales
+        return scales * visibility_weight
 
     def weighted_opacities(self, visibility_weight: Optional[torch.Tensor] = None, opacities: Optional[torch.Tensor] = None):
+        opacities = (self.opacities if opacities is None else opacities)
+        if self.config.visibility_lambda <= 0:
+            return opacities
         if visibility_weight is None:
             visibility_weight = self.visibility_weights()
-        opacities = (self.opacities if opacities is None else opacities) * visibility_weight
-        return opacities
+        return opacities * visibility_weight
 
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
@@ -763,11 +770,14 @@ class GaussianSplattingModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
             visibility_crop = self.visibility
-        if self.training and self.step < self.config.stop_split_at:
+        if self.training and self.step < self.config.stop_split_at and self.config.visibility_lambda > 0:
             # cull based on visibility
             visibility_weight = self.visibility_weights(visibility_crop)
             scales_crop = self.weighted_scales(visibility_weight, scales_crop)
             opacities_crop = self.weighted_opacities(visibility_weight, opacities_crop)
+        elif self.training and self.step < self.config.stop_split_at and self.step == 0:
+            # fake visibility usage to initialize the optimizer
+            opacities_crop = opacities_crop * self.visibility_weights(visibility_crop)
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
         xys, depths, radii, conics, num_tiles_hit, _ = ProjectGaussians.apply(
             means_crop,
@@ -882,6 +892,7 @@ class GaussianSplattingModel(Model):
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], outputs["rgb"].permute(2, 0, 1)[None, ...])
         if self.step < self.config.stop_split_at:
             scale_exp = torch.exp(self.scales)
+            scale_L1 = scale_exp.amin(dim=-1).mean() * self.config.scale_lambda # Penalize for high scale values
             if self.config.use_scale_regularization:
                 scale_reg = (
                     torch.maximum(
@@ -889,20 +900,23 @@ class GaussianSplattingModel(Model):
                     )
                     - self.config.max_gauss_ratio
                 ).mean() * 0.1
-            else:
-                scale_reg = torch.tensor(0.0).to(self.device)
-            scale_L1 = scale_exp.amin(dim=-1).mean() * self.config.scale_lambda # Penalize for high scale values
-            visibility_L1 = torch.sigmoid(self.visibility).mean() * self.config.visibility_lambda # Penalize for high visibility values
+            if self.config.visibility_lambda > 0:
+                visibility_L1 = torch.sigmoid(self.visibility).mean() * self.config.visibility_lambda # Penalize for high visibility values
         else:
-            scale_reg = torch.tensor(0.0).to(self.device)
             scale_L1 = torch.tensor(0.0).to(self.device)
-            visibility_L1 = torch.tensor(0.0).to(self.device)
-        return {
+            if self.config.use_scale_regularization:
+                scale_reg = torch.tensor(0.0).to(self.device)
+            if self.config.visibility_lambda > 0:
+                visibility_L1 = torch.tensor(0.0).to(self.device)
+        losses = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
-            "scale_reg": scale_reg,
             "scale": scale_L1,
-            "visibility": visibility_L1,
         }
+        if self.config.use_scale_regularization:
+            losses["scale_reg"] = scale_reg
+        if self.config.visibility_lambda > 0:
+            losses["visibility"] = visibility_L1
+        return losses
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
