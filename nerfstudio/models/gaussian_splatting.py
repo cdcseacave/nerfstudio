@@ -157,7 +157,7 @@ class GaussianSplattingModelConfig(ModelConfig):
     """
     scale_lambda: float = 0.01 # Weight of scale loss
     cull_visibility_thresh: float = 0.01 # threshold of visibility for culling gaussians
-    visibility_lambda: float = 0.0001 # Weight of visibility loss
+    visibility_lambda: float = 0.0005 # Weight of visibility loss
     init_pts_sphere_num: int = 20000 # Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable
     init_pts_sphere_rad_pct: float = 0.98 # Initialize gaussians at a sphere: set radius based on looking at the 99th percentile of initial points' distance from origin
     init_pts_sphere_rad_mult: float = 1.1 # Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value

@@ -618,7 +618,7 @@ method_configs["gaussian-splatting"] = TrainerConfig(
             "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(
                 lr_final=1.6e-6,
-                max_steps=30000,
+                max_steps=15000,
             ),
         },
         "features_dc": {
@@ -638,10 +638,13 @@ method_configs["gaussian-splatting"] = TrainerConfig(
             "scheduler": None,
         },
         "rotation": {"optimizer": AdamOptimizerConfig(lr=0.001, eps=1e-15), "scheduler": None},
-        "visibility": {"optimizer": AdamOptimizerConfig(lr=0.003, eps=1e-15), "scheduler": None},
+        "visibility": {
+            "optimizer": AdamOptimizerConfig(lr=0.003, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_pre_warmup=0.0005, warmup_steps=4000, lr_final=0.005, max_steps=15000),
+        },
         "camera_opt": {
             "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-5, max_steps=30000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-5, max_steps=15000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
