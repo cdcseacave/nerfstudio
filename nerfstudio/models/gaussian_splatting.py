@@ -199,7 +199,7 @@ class GaussianSplattingModel(Model):
         distances, _ = self.k_nearest_sklearn(points, 3)
         distances = torch.from_numpy(distances)
         # find the average of the three nearest neighbors for each point and use that as the scale
-        avg_dist = distances.mean(dim=-1, keepdim=True)
+        avg_dist = distances.mean(dim=-1, keepdim=True) * 1.2
         if normals is None:
             # use random initialization of the covariance
             print(f"Initializing {num_points} splats")
