@@ -534,52 +534,52 @@ class ExportGaussianSplat(Exporter):
 
             data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
 
-            scales = model.scales.cpu().numpy()
-            quats = model.quats.cpu().numpy()
+            scales = model.scales.data.cpu().numpy()
+            quats = model.quats.data.cpu().numpy()
 
-        n = positions.shape[0]
+            n = positions.shape[0]
 
-        data['x'] = positions[:, 0]
-        data['y'] = positions[:, 1]
-        data['z'] = positions[:, 2]
+            data['x'] = positions[:, 0]
+            data['y'] = positions[:, 1]
+            data['z'] = positions[:, 2]
 
-        normals = self.estimate_normals(np.exp(scales), quats)
-        data['nx'] = normals[:, 0]
-        data['ny'] = normals[:, 1]
-        data['nz'] = normals[:, 2]
+            normals = self.estimate_normals(np.exp(scales), quats)
+            data['nx'] = normals[:, 0]
+            data['ny'] = normals[:, 1]
+            data['nz'] = normals[:, 2]
 
-        if model.config.sh_degree > 0:
-            shs_0 = model.shs_0.contiguous().cpu().numpy()
-            for i in range(shs_0.shape[1]):
-                data[f"f_dc_{i}"] = shs_0[:, i, None]
+            if model.config.sh_degree > 0:
+                shs_0 = model.shs_0.contiguous().cpu().numpy()
+                for i in range(shs_0.shape[1]):
+                    data[f"f_dc_{i}"] = shs_0[:, i]
 
-            # transpose(1, 2) was needed to match the sh order in Inria version
-            shs_rest = model.shs_rest.transpose(1, 2).contiguous().cpu().numpy()
-            shs_rest = shs_rest.reshape((n, -1))
-            for i in range(shs_rest.shape[-1]):
-                data[f"f_rest_{i}"] = shs_rest[:, i, None]
+                # transpose(1, 2) was needed to match the sh order in Inria version
+                shs_rest = model.shs_rest.transpose(1, 2).contiguous().cpu().numpy()
+                sh_coefficients = shs_rest.shape[-1] + 3
+                shs_rest = shs_rest.reshape((n, -1))
+                for i in range(shs_rest.shape[-1]):
+                    data[f"f_rest_{i}"] = shs_rest[:, i]
 
-            sh_coefficients = shs_rest.shape[-1] + 3
-            sh_deg = int(np.sqrt(sh_coefficients)) - 1
-            CONSOLE.print(f'Exporting {positions.shape[0]} splats with SH degree {sh_deg}')
-        else:
-            colors = torch.clamp(RGB2SH(model.colors.clone()), 0.0, 1.0).data.cpu().numpy()
-            data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
-            data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
-            data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
+                sh_deg = int(np.sqrt(sh_coefficients)) - 1
+                CONSOLE.print(f'Exporting {positions.shape[0]} splats with SH degree {sh_deg}')
+            else:
+                colors = torch.clamp(RGB2SH(model.colors.clone()), 0.0, 1.0).data.cpu().numpy()
+                data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
+                data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
+                data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
 
-        data['red']   = (SH2RGB(data['f_dc_0']) * 255.0).astype(np.uint8)
-        data['green'] = (SH2RGB(data['f_dc_1']) * 255.0).astype(np.uint8)
-        data['blue']  = (SH2RGB(data['f_dc_2']) * 255.0).astype(np.uint8)
+            data['red']   = (SH2RGB(data['f_dc_0']) * 255.0).astype(np.uint8)
+            data['green'] = (SH2RGB(data['f_dc_1']) * 255.0).astype(np.uint8)
+            data['blue']  = (SH2RGB(data['f_dc_2']) * 255.0).astype(np.uint8)
 
-        data['scale_0'] = scales[:, 0].reshape(data.shape)
-        data['scale_1'] = scales[:, 1].reshape(data.shape)
-        data['scale_2'] = scales[:, 2].reshape(data.shape)
+            data['scale_0'] = scales[:, 0].reshape(data.shape)
+            data['scale_1'] = scales[:, 1].reshape(data.shape)
+            data['scale_2'] = scales[:, 2].reshape(data.shape)
 
-        data['rot_0'] = quats[:, 0].reshape(data.shape)
-        data['rot_1'] = quats[:, 1].reshape(data.shape)
-        data['rot_2'] = quats[:, 2].reshape(data.shape)
-        data['rot_3'] = quats[:, 3].reshape(data.shape)
+            data['rot_0'] = quats[:, 0].reshape(data.shape)
+            data['rot_1'] = quats[:, 1].reshape(data.shape)
+            data['rot_2'] = quats[:, 2].reshape(data.shape)
+            data['rot_3'] = quats[:, 3].reshape(data.shape)
 
         with open(filename, mode='wb') as f:
             PlyData([PlyElement.describe(data, 'vertex')]).write(f)

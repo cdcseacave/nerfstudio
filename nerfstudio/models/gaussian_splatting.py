@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
@@ -179,17 +180,18 @@ class GaussianSplattingModel(Model):
             self.seed_pts = kwargs["seed_points"]
         else:
             self.seed_pts = None
-        if "base_dir" in kwargs:
-            self.base_dir = kwargs["base_dir"]
+        if "base_dir" in kwargs and kwargs["base_dir"] is not "":
+            self.base_dir = Path(kwargs["base_dir"])
             # open json file to save cull stats
             self.cull_stats_file = open(self.base_dir / "cull_stats.cvs", "w")
             self.cull_stats_file.write(f"Step,Points,Culled,Below alpha,Below visibility,Too bigs\n")
         else:
             self.base_dir = None
+            self.cull_stats_file = None
         super().__init__(*args, **kwargs)
 
     def __del__(self):
-        if self.base_dir is not None:
+        if self.cull_stats_file is not None:
             self.cull_stats_file.close()
 
     def init_scale_rotation(
@@ -568,7 +570,7 @@ class GaussianSplattingModel(Model):
             f"Culled {n_bef - self.num_points} gaussians "
             f"({below_alpha_count} below alpha thresh, {below_visibility_count} below visibility thresh, {toobigs_count} too bigs, {self.num_points} remaining)"
         )
-        if self.base_dir is not None:
+        if self.cull_stats_file is not None:
             # save cull stats and flush to disk
             self.cull_stats_file.write(f"{self.step},{self.num_points},{n_bef - self.num_points},{below_alpha_count},{below_visibility_count},{toobigs_count}\n")
             self.cull_stats_file.flush()
