@@ -608,7 +608,7 @@ class ExportGaussianSplat(Exporter):
                 rotation_transform=dataparser_transform[:3, :3],
                 position_transform=input_transform,
                 scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
-                filename=self.output_dir / 'transformed.ply',
+                filename=self.output_dir / 'splats_transformed.ply',
             )
 
         with open(self.output_dir / "splat_info.json", "w") as f:
@@ -655,7 +655,7 @@ class ExportGaussianSplat(Exporter):
         data['ny'] = transformed_normals[1]
         data['nz'] = transformed_normals[2]
 
-        quat_transform = Quaternion(matrix=rotation_transform, rtol=1e-05, atol=1e-06)
+        quat_transform = Quaternion(matrix=rotation_transform, rtol=1e-04, atol=1e-04)
         for i in range(len(data['rot_0'])):
             quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
             quat = quat_transform * quat
