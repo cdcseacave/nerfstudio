@@ -508,7 +508,7 @@ class ExportGaussianSplat(Exporter):
 
         model: GaussianSplattingModel = pipeline.model
 
-        filename = self.output_dir / "splat.ply"
+        filename = self.output_dir / "splats.ply"
 
         data = np.zeros(model.means.shape[0], dtype=np.dtype([
             # Position
@@ -587,7 +587,6 @@ class ExportGaussianSplat(Exporter):
 
         first_image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
             min(pipeline.datamanager.train_dataset.image_filenames))
-
         initial_camera_transform = np.vstack([
             pipeline.datamanager.train_dataset.cameras[first_image_idx].camera_to_worlds.numpy(),
             [0, 0, 0, 1],
@@ -611,7 +610,7 @@ class ExportGaussianSplat(Exporter):
                 filename=self.output_dir / 'splats_transformed.ply',
             )
 
-        with open(self.output_dir / "splat_info.json", "w") as f:
+        with open(self.output_dir / "splats_info.json", "w") as f:
             json.dump({
                 # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
                 'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
@@ -620,7 +619,7 @@ class ExportGaussianSplat(Exporter):
                 'inputTransform': input_transform.ravel('F').tolist(),
                 'steps': step + 1,
             }, f)
-        CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
+        CONSOLE.print(f'Wrote {self.output_dir / "splats_info.json"}')
 
         export_frame_render(pipeline, self.output_dir / 'render.png', first_image_idx)
 
