@@ -265,7 +265,7 @@ class Viewer:
                 points=pipeline.model.means.numpy(force=True) * VISER_NERFSTUDIO_SCALE_RATIO,
                 colors=(255, 0, 0),
                 point_size=0.01,
-                point_shape="circle",
+              #  point_shape="circle",
                 visible=False,  # Hidden by default.
             )
         self.ready = True

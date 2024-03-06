@@ -20,31 +20,43 @@ Script for exporting NeRF into other formats.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
+import mediapy
 import numpy as np
 import open3d as o3d
+from pyquaternion import Quaternion
 import torch
 import tyro
 from typing_extensions import Annotated, Literal
 
+from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
+from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager, FullImageDatamanagerConfig
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
+from nerfstudio.data.dataparsers.colmap_dataparser import ColmapDataParserConfig
+from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.scene_box import OrientedBox
+from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
-from nerfstudio.exporter.exporter_utils import collect_camera_poses, generate_point_cloud, get_mesh_from_filename
+from nerfstudio.exporter.exporter_utils import collect_camera_poses, generate_point_cloud, get_mesh_from_filename, export_frame_render
 from nerfstudio.exporter.marching_cubes import generate_mesh_with_multires_marching_cubes
 from nerfstudio.fields.sdf_field import SDFField  # noqa
 from nerfstudio.models.splatfacto import SplatfactoModel
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
+from nerfstudio.process_data import colmap_utils
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
+from nerfstudio.models.visiofacto import VisiofactoModel
 
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
 @dataclass
 class Exporter:
@@ -475,22 +487,89 @@ class ExportCameraPoses(Exporter):
 
             CONSOLE.print(f"[bold green]:white_check_mark: Saved poses to {output_file_path}")
 
+@dataclass
+class ExportImages(Exporter):
+    """
+    Export 3D Gaussian Splatting model to a .ply
+    """
+
+    output_dir: Optional[Path] = None
+    load_step: Optional[int] = None
+    transform_to_colmap_coordinates: bool = False
+    as_training: bool = False
+
+    thumbnail_size: int = 512
+    thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
+
+    def main(self) -> None:
+        if self.output_dir is None:
+            self.output_dir = self.load_config.parent / 'images'
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        def update_config_callback(config: TrainerConfig):
+            assert isinstance(config.pipeline.datamanager, FullImageDatamanagerConfig)
+            assert isinstance(config.pipeline.datamanager.dataparser, ColmapDataParserConfig)
+            config.pipeline.datamanager.dataparser.load_3D_points = False
+            config.pipeline.datamanager.cache_images = 'no-cache'
+            config.load_step = self.load_step
+            return config
+
+        _, pipeline, _, step = eval_setup(self.load_config,
+                                          update_config_callback=update_config_callback)
+
+        assert isinstance(pipeline.datamanager, FullImageDatamanager)
+
+        model = pipeline.model
+
+        if self.as_training:
+            model.train(True)
+
+        model.step = step
+
+        # sns.histplot(torch.sigmoid(model.opacities).detach().cpu().numpy())
+        # plt.savefig(self.output_dir / 'opacity_hist.png')
+
+        with torch.no_grad():
+            for camera, filename in zip(pipeline.datamanager.train_dataset.cameras, pipeline.datamanager.train_dataset.image_filenames):
+                output = model.get_outputs(camera.reshape((1,)).to(model.device))['rgb'].cpu()
+                mediapy.write_image(self.output_dir / filename.name, output)
+                CONSOLE.print(f'Wrote {self.output_dir / filename.name}')
+
 
 @dataclass
 class ExportGaussianSplat(Exporter):
     """
     Export 3D Gaussian Splatting model to a .ply
     """
+    output_dir: Optional[Path] = None
+    load_step: Optional[int] = None
+
+    thumbnail_size: int = 512
+    thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
+
+    transform_to_colmap_coordinates: bool = False
 
     def main(self) -> None:
+        if self.output_dir is None:
+            self.output_dir = self.load_config.parent
         if not self.output_dir.exists():
             self.output_dir.mkdir(parents=True)
 
-        _, pipeline, _, _ = eval_setup(self.load_config)
+        def update_config_callback(config: TrainerConfig):
+            assert isinstance(config.pipeline.datamanager, FullImageDatamanagerConfig)
+            assert isinstance(config.pipeline.datamanager.dataparser, ColmapDataParserConfig)
+            config.pipeline.datamanager.dataparser.load_3D_points = False
+            config.pipeline.datamanager.cache_images = 'no-cache'
+            config.load_step = self.load_step
+            return config
 
-        assert isinstance(pipeline.model, SplatfactoModel)
+        _, pipeline, _, step = eval_setup(self.load_config,
+                                          update_config_callback=update_config_callback)
 
-        model: SplatfactoModel = pipeline.model
+        assert isinstance(pipeline.model, SplatfactoModel) or isinstance(pipeline.model, VisiofactoModel)
+
+        model: Union[SplatfactoModel, VisiofactoModel] = pipeline.model
 
         filename = self.output_dir / "splat.ply"
 
@@ -541,9 +620,161 @@ class ExportGaussianSplat(Exporter):
             for k, t in map_to_tensors.items():
                 map_to_tensors[k] = map_to_tensors[k][select, :]
 
-        pcd = o3d.t.geometry.PointCloud(map_to_tensors)
+        o3d.t.io.write_point_cloud(str(filename), o3d.t.geometry.PointCloud(map_to_tensors))
+        CONSOLE.print(f'Wrote {filename}')
 
-        o3d.t.io.write_point_cloud(str(filename), pcd)
+        export_frame_render(pipeline, self.output_dir / "render.png")
+
+        frames_json = self.get_frames_json(pipeline.datamanager)
+        with open(self.output_dir / "frames.json", "w") as f:
+            json.dump(frames_json, f)
+        CONSOLE.print(f'Wrote {self.output_dir / "frames.json"}')
+
+        initial_camera_transform = self.get_initial_camera_transform(pipeline.datamanager)
+
+        scale_transform = np.eye(4)
+        scale_transform[:3, :3] *= pipeline.datamanager.train_dataparser_outputs.dataparser_scale
+        dataparser_transform = np.vstack([
+            pipeline.datamanager.train_dataparser_outputs.dataparser_transform.numpy(),
+            [0, 0, 0, 1],
+        ])
+        # dataparser_transform is applied before scaling
+        input_transform = scale_transform @ dataparser_transform
+
+        with open(self.output_dir / "splat_info.json", "w") as f:
+            json.dump({
+                # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
+                'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
+                # Transformation matrix applied to colmap poses to convert them to the same
+                # coordinate system as the output splats.
+                'inputTransform': input_transform.ravel('F').tolist(),
+                'steps': step + 1,
+                'numberOfSplats': positions.shape[0],
+            }, f)
+        CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
+
+        if self.transform_to_colmap_coordinates:
+            self.write_transformed_ply(
+                data=map_to_tensors, positions=positions, scales=scales,
+                rotation_transform=dataparser_transform,
+                position_transform=input_transform,
+                scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
+            )
+
+    def write_transformed_ply(
+            self,
+            data,
+            positions: np.ndarray,
+            scales: np.ndarray,
+            rotation_transform: np.ndarray,
+            position_transform: np.ndarray,
+            scale_transform: float,
+    ):
+        filename = self.output_dir / 'transformed.ply'
+        transformed_positions = np.linalg.inv(position_transform) @ np.concatenate([
+            positions,
+            np.ones((positions.shape[0], 1)),
+        ], axis=1).T
+        data['positions'] = transformed_positions[0:3].T.astype('float32')
+
+        transformed_scales = torch.sigmoid(torch.from_numpy(scales))
+        transformed_scales = (transformed_scales / scale_transform).T
+        transformed_scales = torch.logit(transformed_scales).numpy()
+        data['scale_0'] = transformed_scales[0:1].T
+        data['scale_1'] = transformed_scales[1:2].T
+        data['scale_2'] = transformed_scales[2:3].T
+        rotation_transform = Quaternion(matrix=np.linalg.inv(rotation_transform))
+        for i in range(len(data['rot_0'])):
+            quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
+            quat = rotation_transform * quat
+            data['rot_0'][i] = quat[0]
+            data['rot_1'][i] = quat[1]
+            data['rot_2'][i] = quat[2]
+            data['rot_3'][i] = quat[3]
+
+        o3d.t.io.write_point_cloud(str(filename), o3d.t.geometry.PointCloud(data))
+        CONSOLE.print(f'Wrote {filename}')
+
+    def get_frames_json(self, datamanager: FullImageDatamanager):
+        frames = []
+        for i, path in enumerate(datamanager.train_dataset.image_filenames):
+            transform = np.vstack([
+                datamanager.train_dataset.cameras[i].camera_to_worlds.numpy(),
+                [0, 0, 0, 1],
+            ])
+            frames.append({
+                'name': path.name,
+                # Column-major 4x4 camera-to-worlds transform matrix for the camera pose.
+                # This matches the frames.json that we write out for object capture.
+                'transform': transform.ravel('F').tolist(),
+            })
+        frames = sorted(frames, key=lambda f: f['name'])
+
+        distorted_colmap_path = datamanager.config.data / 'distorted_model'
+        if distorted_colmap_path.exists():
+            camera_id_to_camera = colmap_utils.read_cameras_binary(distorted_colmap_path / 'cameras.bin')
+            image_id_to_image = colmap_utils.read_images_binary(distorted_colmap_path / 'images.bin')
+
+            print("Available frames are")
+            print([f['name'] for f in frames])
+
+            for image_id, image in image_id_to_image.items():
+                print("Searching for", image.name)
+                try:
+                    frame = next(f for f in frames if f['name'] == image.name)
+                except StopIteration:
+                    print("Skipping", image.name)
+                    continue
+                camera = camera_id_to_camera[image.camera_id]
+                frame['params'] = colmap_utils.parse_colmap_camera_params(camera)
+                frame['params']['fx'] = frame['params'].pop('fl_x')
+                frame['params']['fy'] = frame['params'].pop('fl_y')
+                # For camera model OPENCV, this writes out w, h, fx, fy, cx, cy, k1, k2, p1, p2.
+        else:
+            CONSOLE.print(f'No distorted model found at {distorted_colmap_path}. '+
+                          'Not writing distortion params to frames.json.')
+
+        return frames
+
+    def get_initial_camera_transform(self, datamanager: FullImageDatamanager) -> np.array:
+        assert isinstance(datamanager.train_dataset, InputDataset)
+        first_few_image_idx = sorted(
+            range(len(datamanager.train_dataset.image_filenames)),
+            key=lambda i: datamanager.train_dataset.image_filenames[i],
+        )[:10]
+        cameras = [datamanager.train_dataset.cameras[i] for i in first_few_image_idx]
+        camera_transforms = [camera.camera_to_worlds.numpy() for camera in cameras]
+
+        # We use --center_method="focus", so the origin of the coordinate system is the focus.
+        focus = np.zeros(3)
+        # Average distance from each camera to the focus point.
+        avg_distance = np.mean([np.linalg.norm(t[:3, 3] - focus) for t in camera_transforms])
+        # Back up each camera by 0.25x the average distance.
+        new_positions = [t @ np.array([0, 0, avg_distance * 0.25, 1]) for t in camera_transforms]
+        # Average the new positions together, maintaining distance to the focus.
+        new_position = self.average_position(new_positions, focus)
+
+        # Point the camera in the same direction as the average camera, while aligning the up direction with the world.
+        # (Z-axis points behind the camera in the camera's coordinate frame and up in the world's coordinate frame.)
+        new_z = np.mean([t[:3, 2] for t in camera_transforms], axis=0)
+        new_z /= np.linalg.norm(new_z)
+        new_x = np.cross(np.array([0, 0, 1]), new_z)
+        new_x /= np.linalg.norm(new_x)
+        new_y = np.cross(new_z, new_x)
+
+        new_transform = np.vstack([
+            np.stack([new_x, new_y, new_z, new_position], axis=1),
+            np.array([0, 0, 0, 1]),
+        ])
+
+        return new_transform
+
+    def average_position(self, positions: np.array, focus: np.array) -> np.array:
+        avg_distance = np.mean([np.linalg.norm(p - focus) for p in positions])
+        avg_direction = np.mean([p - focus for p in positions], axis=0)
+        avg_direction /= np.linalg.norm(avg_direction)
+        return focus + avg_direction * avg_distance
+
 
 
 Commands = tyro.conf.FlagConversionOff[
@@ -554,6 +785,7 @@ Commands = tyro.conf.FlagConversionOff[
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
         Annotated[ExportCameraPoses, tyro.conf.subcommand(name="cameras")],
         Annotated[ExportGaussianSplat, tyro.conf.subcommand(name="gaussian-splat")],
+        Annotated[ExportImages, tyro.conf.subcommand(name="images")],
     ]
 ]
 

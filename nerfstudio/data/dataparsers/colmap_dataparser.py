@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import sys
 from dataclasses import dataclass, field
 from functools import partial
@@ -25,9 +27,10 @@ import numpy as np
 import torch
 from PIL import Image
 from rich.prompt import Confirm
+import open3d as o3d
 
 from nerfstudio.cameras import camera_utils
-from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras
+from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
 from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.data.utils import colmap_parsing_utils as colmap_utils
@@ -40,8 +43,6 @@ from nerfstudio.data.utils.dataparsers_utils import (
 from nerfstudio.process_data.colmap_utils import parse_colmap_camera_params
 from nerfstudio.utils.rich_utils import CONSOLE, status
 from nerfstudio.utils.scripts import run_command
-
-MAX_AUTO_RESOLUTION = 1600
 
 
 @dataclass
@@ -58,9 +59,10 @@ class ColmapDataParserConfig(DataParserConfig):
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
-    orientation_method: Literal["pca", "up", "vertical", "none"] = "up"
+    orientation_method: Literal["pca", "up", "vertical", "flip", "gravity", "gravity-or-flip", "none"] \
+        = "gravity-or-flip"
     """The method to use for orientation."""
-    center_method: Literal["poses", "focus", "none"] = "poses"
+    center_method: Literal["poses", "focus", "none"] = "focus"
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
@@ -78,7 +80,7 @@ class ColmapDataParserConfig(DataParserConfig):
     Interval uses every nth frame for eval (used by most academic papers, e.g. MipNerf360, GSplat).
     All uses all the images for any split.
     """
-    train_split_fraction: float = 0.9
+    train_split_fraction: float = 1.0
     """The fraction of images to use for training. The remaining images are for eval."""
     eval_interval: int = 8
     """The interval between frames to use for eval. Only used when eval_mode is eval-interval."""
@@ -91,13 +93,18 @@ class ColmapDataParserConfig(DataParserConfig):
     """Path to masks directory. If not set, masks are not loaded."""
     depths_path: Optional[Path] = None
     """Path to depth maps directory. If not set, depths are not loaded."""
-    colmap_path: Path = Path("colmap/sparse/0")
+    gravity_path: Optional[Path] = Path("keyframes/gravity")
+    """Path to gravity directory. If not set, gravity is not loaded."""
+    colmap_path: Path = Path("sparse/0")
     """Path to the colmap reconstruction directory relative to the data path."""
-    load_3D_points: bool = True
-    """Whether to load the 3D points from the colmap reconstruction. This is helpful for Gaussian splatting and
-    generally unused otherwise, but it's typically harmless so we default to True."""
-    max_2D_matches_per_3D_point: int = 0
+    dense_point_cloud_path: Optional[Path] = Path("dense.ply")
+    """Path to the dense point cloud relative to the data path. If not set, the dense point cloud is not loaded."""
+    load_3D_points: bool = False
+    """Whether to load the 3D points from the colmap reconstruction."""
+    max_2D_matches_per_3D_point: int = -1
     """Maximum number of 2D matches per 3D point. If set to -1, all 2D matches are loaded. If set to 0, no 2D matches are loaded."""
+    max_dense_points_before_downsampling: int = 1_000_000
+    """When loading a dense point cloud, use voxel downsampling if the number of points is greater than this number."""
 
 
 class ColmapDataParser(DataParser):
@@ -180,6 +187,14 @@ class ColmapDataParser(DataParser):
                 frame["depth_path"] = (
                     (self.config.data / self.config.depths_path / im_data.name).with_suffix(".png").as_posix()
                 )
+            if self.config.gravity_path is not None:
+                gravity_path = (
+                    (self.config.data / self.config.gravity_path / im_data.name).with_suffix(".json")
+                )
+                if gravity_path.exists():
+                    with open(gravity_path, "r") as f:
+                        gravity = json.load(f)
+                        frame["gravity"] = np.array([gravity['x'], gravity['y'], gravity['z']])
             frames.append(frame)
             if camera_model is not None:
                 assert camera_model == frame["camera_model"], "Multiple camera models are not supported"
@@ -250,6 +265,32 @@ class ColmapDataParser(DataParser):
         colmap_path = self.config.data / self.config.colmap_path
         assert colmap_path.exists(), f"Colmap path {colmap_path} does not exist."
 
+        # in x,y,z order
+        # assumes that the scene is centered at the origin
+        aabb_scale = self.config.scene_scale
+        scene_box = SceneBox(
+            aabb=torch.tensor(
+                [[-aabb_scale, -aabb_scale, -aabb_scale], [aabb_scale, aabb_scale, aabb_scale]], dtype=torch.float32
+            )
+        )
+
+        if split == "val" and self.config.train_split_fraction >= 1.0:
+            dataparser_outputs = DataparserOutputs(
+                image_filenames=[],
+                cameras=Cameras( # dummy cameras
+                    fx=torch.tensor([1.0], dtype=torch.float32),
+                    fy=torch.tensor([1.0], dtype=torch.float32),
+                    cx=torch.tensor([0.0], dtype=torch.float32),
+                    cy=torch.tensor([0.0], dtype=torch.float32),
+                    height=torch.tensor([1], dtype=torch.int32),
+                    width=torch.tensor([1], dtype=torch.int32),
+                    camera_to_worlds=torch.eye(4, dtype=torch.float32).unsqueeze(0),
+                    camera_type=CameraType.PERSPECTIVE,
+                ),
+                scene_box=scene_box,
+            )
+            return dataparser_outputs
+
         meta = self._get_all_images_and_cameras(colmap_path)
         camera_type = CAMERA_MODEL_TO_TYPE[meta["camera_model"]]
 
@@ -257,6 +298,7 @@ class ColmapDataParser(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
+        gravity = []
 
         fx = []
         fy = []
@@ -290,6 +332,8 @@ class ColmapDataParser(DataParser):
                 mask_filenames.append(Path(frame["mask_path"]))
             if "depth_path" in frame:
                 depth_filenames.append(Path(frame["depth_path"]))
+            if "gravity" in frame:
+                gravity.append(frame["gravity"])
 
         assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
         Different number of image and mask filenames.
@@ -299,11 +343,20 @@ class ColmapDataParser(DataParser):
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
         """
+        assert len(gravity) == 0 or len(gravity) == len(image_filenames), """
+        Different number of images and gravity vectors.
+        """
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        gravity = torch.from_numpy(np.array(gravity).astype(np.float32)) if gravity else None
+        if self.config.orientation_method == 'gravity-or-flip':
+            orientation_method = 'gravity' if gravity is not None else 'flip'
+        else:
+            orientation_method = self.config.orientation_method
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
-            method=self.config.orientation_method,
+            method=orientation_method,
             center_method=self.config.center_method,
+            gravity=gravity,
         )
 
         # Scale poses
@@ -325,15 +378,6 @@ class ColmapDataParser(DataParser):
 
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
-
-        # in x,y,z order
-        # assumes that the scene is centered at the origin
-        aabb_scale = self.config.scene_scale
-        scene_box = SceneBox(
-            aabb=torch.tensor(
-                [[-aabb_scale, -aabb_scale, -aabb_scale], [aabb_scale, aabb_scale, aabb_scale]], dtype=torch.float32
-            )
-        )
 
         fx = torch.tensor(fx, dtype=torch.float32)[idx_tensor]
         fy = torch.tensor(fy, dtype=torch.float32)[idx_tensor]
@@ -367,7 +411,7 @@ class ColmapDataParser(DataParser):
             scale_factor *= applied_scale
 
         metadata = {}
-        if self.config.load_3D_points:
+        if self.config.load_3D_points and image_filenames:
             # Load 3D points
             metadata.update(self._load_3D_points(colmap_path, transform_matrix, scale_factor))
 
@@ -387,6 +431,33 @@ class ColmapDataParser(DataParser):
         return dataparser_outputs
 
     def _load_3D_points(self, colmap_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
+        if self.config.dense_point_cloud_path is not None:
+            dense_point_cloud_path = self.config.data / self.config.dense_point_cloud_path
+            if not dense_point_cloud_path.exists():
+                raise ValueError(f"Dense point cloud {dense_point_cloud_path} does not exist")
+            CONSOLE.log(f'Loading {dense_point_cloud_path}')
+            pcd: o3d.geometry.PointCloud = o3d.io.read_point_cloud(str(dense_point_cloud_path))
+            if len(pcd.points) < 1000:
+                raise RuntimeError(f'Dense point cloud {pcd} has too few points')
+            CONSOLE.log(f'Loaded dense point cloud with {len(pcd.points)} points')
+            if len(pcd.points) > self.config.max_dense_points_before_downsampling:
+                voxel_size = 0.005
+                while True:
+                    downsampled = pcd.voxel_down_sample(voxel_size)
+                    if len(downsampled.points) < self.config.max_dense_points_before_downsampling:
+                        break
+                    voxel_size *= 1.25
+                pcd = downsampled
+                CONSOLE.log(f'Downsampled dense point cloud to {len(pcd.points)} points, using voxel size {voxel_size}')
+            pcd.transform(np.vstack([transform_matrix.numpy(), [0, 0, 0, 1]]))
+            pcd.scale(scale_factor, center=np.array([0, 0, 0]))
+            out = {
+                "points3D_xyz": torch.from_numpy(np.array(pcd.points, dtype=np.float32)),
+                "points3D_rgb": torch.from_numpy(np.array(pcd.colors) * 255),
+            }
+            if len(pcd.normals) > 0:
+                out["points3D_normal"] = torch.from_numpy(np.array(pcd.normals, dtype=np.float32))
+            return out
         if (colmap_path / "points3D.bin").exists():
             colmap_points = colmap_utils.read_points3D_binary(colmap_path / "points3D.bin")
         elif (colmap_path / "points3D.txt").exists():
@@ -491,10 +562,6 @@ class ColmapDataParser(DataParser):
                 h, w = test_img.size
                 max_res = max(h, w)
                 df = 0
-                while True:
-                    if (max_res / 2 ** (df)) <= MAX_AUTO_RESOLUTION:
-                        break
-                    df += 1
 
                 self._downscale_factor = 2**df
                 CONSOLE.log(f"Using image downscale factor of {self._downscale_factor}")

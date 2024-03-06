@@ -24,7 +24,7 @@ from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.models.base_model import Model
 from nerfstudio.models.splatfacto import SplatfactoModel
 from nerfstudio.viewer.control_panel import ControlPanel
-
+from nerfstudio.models.visiofacto import VisiofactoModel
 
 def populate_export_tab(
     server: viser.ViserServer,
@@ -32,7 +32,7 @@ def populate_export_tab(
     config_path: Path,
     viewer_model: Model,
 ) -> None:
-    viewing_gsplat = isinstance(viewer_model, SplatfactoModel)
+    viewing_gsplat = isinstance(viewer_model, SplatfactoModel) or isinstance(viewer_model, VisiofactoModel)
     if not viewing_gsplat:
         crop_output = server.add_gui_checkbox("Use Crop", False)
 

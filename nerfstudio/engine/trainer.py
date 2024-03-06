@@ -34,16 +34,22 @@ from rich.table import Table
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from nerfstudio.configs.experiment_config import ExperimentConfig
+from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
+from nerfstudio.exporter.exporter_utils import export_frame_render
 from nerfstudio.pipelines.base_pipeline import VanillaPipeline
 from nerfstudio.utils import profiler, writer
 from nerfstudio.utils.decorators import check_eval_enabled, check_main_thread, check_viewer_enabled
+from nerfstudio.utils.math import compute_statistics
 from nerfstudio.utils.misc import step_check
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.writer import EventName, TimeWriter
 from nerfstudio.viewer.viewer import Viewer as ViewerState
 from nerfstudio.viewer_legacy.server.viewer_state import ViewerLegacyState
+
+from nerfstudio.models.splatfacto import SplatfactoModel
+from nerfstudio.models.visiofacto import VisiofactoModel
 
 TRAIN_INTERATION_OUTPUT = Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]
 TORCH_DEVICE = str
@@ -84,6 +90,10 @@ class TrainerConfig(ExperimentConfig):
     """Optionally log gradients during training"""
     gradient_accumulation_steps: Dict = field(default_factory=lambda: {})
     """Number of steps to accumulate gradients over. Contains a mapping of {param_group:num}"""
+    gpu_index: Optional[int] = None
+    """If the machine has multiple GPUs, which GPU to use for training."""
+    add_commit_sha: bool = False
+    """Add the commit SHA to the output directory."""
 
 
 class Trainer:
@@ -116,7 +126,10 @@ class Trainer:
         self.world_size = world_size
         self.device: TORCH_DEVICE = config.machine.device_type
         if self.device == "cuda":
-            self.device += f":{local_rank}"
+            if self.config.gpu_index is not None:
+                self.device += f":{self.config.gpu_index}"
+            else:
+                self.device += f":{local_rank}"
         self.mixed_precision: bool = self.config.mixed_precision
         self.use_grad_scaler: bool = self.mixed_precision or self.config.use_grad_scaler
         self.training_state: Literal["training", "paused", "completed"] = "training"
@@ -234,6 +247,11 @@ class Trainer:
             num_iterations = self.config.max_num_iterations
             step = 0
             for step in range(self._start_step, self._start_step + num_iterations):
+                if hasattr(self.pipeline.model, 'early_stop_at_step') \
+                        and self.pipeline.model.early_stop_at_step is not None \
+                        and self.pipeline.model.early_stop_at_step <= step:
+                    CONSOLE.log(f'Stopping early at step {step}')
+                    break
                 while self.training_state == "paused":
                     time.sleep(0.01)
                 with self.train_lock:
@@ -266,6 +284,10 @@ class Trainer:
                         avg_over_steps=True,
                     )
 
+                # If gaussian_splat -> record number of gaussians
+                if isinstance(self.pipeline.model, SplatfactoModel) or isinstance(self.pipeline.model, VisiofactoModel):
+                    writer.put_scalar(name=EventName.GAUSSIAN_NUM, scalar=self.pipeline.model.num_points, step=step)
+
                 self._update_viewer_state(step)
 
                 # a batch of train rays
@@ -286,7 +308,7 @@ class Trainer:
                 if self.pipeline.datamanager.eval_dataset:
                     self.eval_iteration(step)
 
-                if step_check(step, self.config.steps_per_save):
+                if step_check(step + 1, self.config.steps_per_save):
                     self.save_checkpoint(step)
 
                 writer.write_out_storage()
@@ -306,6 +328,13 @@ class Trainer:
         table.add_row("Config File", str(self.config.get_base_dir() / "config.yml"))
         table.add_row("Checkpoint Directory", str(self.checkpoint_dir))
         CONSOLE.print(Panel(table, title="[bold][green]:tada: Training Finished :tada:[/bold]", expand=False))
+
+        # If gaussian_splat -> render first image
+        if isinstance(self.pipeline.model, SplatfactoModel) or isinstance(self.pipeline.model, VisiofactoModel):
+            export_frame_render(self.pipeline, self.checkpoint_dir.parent / "render0.png")
+            compute_statistics(torch.sigmoid(self.pipeline.model.opacities).squeeze(1).detach().cpu().numpy(), "Opacity statistics:")
+            compute_statistics(torch.exp(self.pipeline.model.scales).amin(dim=-1).detach().cpu().numpy(), "Scale-min statistics:")
+            compute_statistics(torch.exp(self.pipeline.model.scales).amax(dim=-1).detach().cpu().numpy(), "Scale-max statistics:")
 
         # after train end callbacks
         for callback in self.callbacks:

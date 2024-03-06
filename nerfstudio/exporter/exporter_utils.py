@@ -23,10 +23,13 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import copy
+import mediapy
 import numpy as np
 import pymeshlab
 import torch
 from jaxtyping import Float
+from pathlib import Path
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 from torch import Tensor
 
@@ -351,3 +354,20 @@ def collect_camera_poses(pipeline: VanillaPipeline) -> Tuple[List[Dict[str, Any]
     eval_frames = collect_camera_poses_for_dataset(eval_dataset)
 
     return train_frames, eval_frames
+
+def export_frame_render(pipeline: Pipeline, output_path: Path, image_idx: int = -1) -> None:
+    """Export a frame render to a file."""
+    if image_idx < 0:
+        image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
+            min(pipeline.datamanager.train_dataset.image_filenames))
+
+    with torch.no_grad():
+        data = copy.deepcopy(pipeline.datamanager.cached_train[image_idx])
+        data["image"] = data["image"].to(pipeline.model.device)
+        cameras = pipeline.datamanager.train_dataset.cameras[image_idx:image_idx+1]
+        outputs = pipeline.model.get_outputs(cameras.to(pipeline.model.device))
+        rgb = outputs['rgb'].cpu()
+        metrics = pipeline.model.get_metrics_dict(outputs, data)
+        psnr = metrics['psnr'].cpu()
+    mediapy.write_image(output_path, rgb)
+    CONSOLE.print(f'Wrote image {image_idx} with {psnr:.2f} PSNR at {output_path}')

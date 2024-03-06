@@ -251,6 +251,22 @@ class ControlPanel:
         for client in self.viser_server.get_clients().values():
             client.camera.up_direction = vtf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
 
+    def toggle_pause_button(self) -> None:
+        self.pause_train.visible = not self.pause_train.visible
+        self.resume_train.visible = not self.resume_train.visible
+
+    def toggle_cameravis_button(self) -> None:
+        self.hide_images.visible = not self.hide_images.visible
+        self.show_images.visible = not self.show_images.visible
+
+    def update_step(self, step):
+        """
+        Args:
+            step: the train step to set the model to
+        """
+        with self.viser_server.atomic(), self.stat_folder:
+            self.markdown.content = f"Step: {step}"
+
     def update_output_options(self, new_options: List[str]):
         """
         Args:

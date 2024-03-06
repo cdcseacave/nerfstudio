@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
+import subprocess
 import yaml
 
 from nerfstudio.configs.base_config import InstantiateConfig, LoggingConfig, MachineConfig, ViewerConfig
@@ -36,6 +37,8 @@ class ExperimentConfig(InstantiateConfig):
     """Full config contents for running an experiment. Any experiment types (like training) will be
     subclassed from this, and must have their _target field defined accordingly."""
 
+    output_to_data_dir: bool = False
+    """If true, save outputs to the input directory instead of a separate directory"""
     output_dir: Path = Path("outputs")
     """relative or absolute output directory to save all checkpoints and logging"""
     method_name: Optional[str] = None
@@ -90,15 +93,18 @@ class ExperimentConfig(InstantiateConfig):
 
     def is_tensorboard_enabled(self) -> bool:
         """Checks if tensorboard is enabled."""
-        return ("tensorboard" == self.vis) | ("viewer+tensorboard" == self.vis)
+        return 'tensorboard' in self.vis.split('+')
 
     def is_comet_enabled(self) -> bool:
         return ("comet" == self.vis) | ("viewer+comet" == self.vis)
 
-    def set_timestamp(self) -> None:
+    def set_timestamp(self, add_commit_id: bool = False) -> None:
         """Dynamically set the experiment timestamp"""
         if self.timestamp == "{timestamp}":
             self.timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            if add_commit_id:
+                commit_id = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode('utf-8')  # get the current Git commit ID
+                self.timestamp = f"{commit_id}-{self.timestamp}"
 
     def set_experiment_name(self) -> None:
         """Dynamically set the experiment name"""
@@ -115,6 +121,8 @@ class ExperimentConfig(InstantiateConfig):
         # check the experiment and method names
         assert self.method_name is not None, "Please set method name in config or via the cli"
         self.set_experiment_name()
+        if self.output_to_data_dir:
+            return Path(self.pipeline.datamanager.data)
         return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
 
     def get_checkpoint_dir(self) -> Path:

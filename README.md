@@ -48,6 +48,55 @@
 - [Learn more](#learn-more)
 - [Supported Features](#supported-features)
 
+# Maintaining this Private Repo
+- Create the private fork of the original public repo
+    1. Create a bare clone of the repo. (This is temporary and will be removed so just do it wherever.)
+    ```bash
+    git clone --bare https://github.com/nerfstudio-project/nerfstudio.git
+    ```
+    2. Create a new private repo on Github and name it nerfstudio
+    3. Mirror-push your bare clone to your new nerfstudio repo
+    ```bash
+    cd nerfstudio.git
+    git push --mirror git@github.com:PolyCam/nerfstudio.git
+    ```
+    4. Remove the temporary local repo from step 1
+    ```bash
+    cd ..
+    rm -rf nerfstudio.git
+    ```
+- Setup your local repo clone
+    1. Clone onto your machine
+    ```bash
+    git clone git@github.com:PolyCam/nerfstudio.git
+    ```
+    2. Setup the original public repo as remote to fetch (potential) future changes.
+    ```bash
+    cd nerfstudio
+    git remote add upstream https://github.com/nerfstudio-project/nerfstudio.git
+    ```
+    3. Disable push on the remote (as you are not allowed to push to it anyway).
+    ```bash
+    git remote set-url --push upstream DISABLE
+    ```
+    4. Check this was done correctly by listing all your remotes with `git remote -v`. You should see:
+    ```bash
+    origin  git@github.com:PolyCam/nerfstudio.git (fetch)
+    origin  git@github.com:PolyCam/nerfstudio.git (push)
+    upstream    https://github.com/nerfstudio-project/nerfstudio.git (fetch)
+    upstream    DISABLE (push)
+    ```
+    5. Now you can pull changes from upstream:
+    ```bash
+    git fetch
+    git checkout <upstream_branch>
+    git pull
+    git checkout <local_branch>
+    git merge <upstream_branch>
+    git push origin <local_branch>
+    ```
+- These instructions were summarized from here: https://gist.github.com/0xjac/85097472043b697ab57ba1b1c7530274
+
 # About
 
 _It’s as simple as plug and play with nerfstudio!_
@@ -154,6 +203,58 @@ pip install -e .
 **OR** if you want to skip all installation steps and directly start using nerfstudio, use the docker image:
 
 See [Installation](https://github.com/nerfstudio-project/nerfstudio/blob/main/docs/quickstart/installation.md) - **Use docker image**.
+
+### Installing openMVS
+
+```bash
+sudo apt install -y \
+  git \
+  cmake \
+  ninja-build \
+  build-essential \
+  libboost-program-options-dev \
+  libboost-filesystem-dev \
+  libboost-graph-dev \
+  libboost-iostreams-dev \
+  libboost-system-dev \
+  libeigen3-dev \
+  libflann-dev \
+  libfreeimage-dev \
+  libmetis-dev \
+  libopencv-dev \
+  libgoogle-glog-dev \
+  libgtest-dev \
+  libsqlite3-dev \
+  libglew-dev \
+  qtbase5-dev \
+  libqt5opengl5-dev \
+  libcgal-dev \
+  libceres-dev \
+  libheif-examples
+
+mkdir openMVS-dependencies
+cd openMVS-dependencies
+git clone git@github.com:cdcseacave/openMVS.git --recursive -b develop
+wget "https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/2022.02.tar.gz" -O vcglib-2022.02.tar.gz
+tar -xzf vcglib-2022.02.tar.gz
+wget "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+tar -xzf eigen-3.4.0.tar.gz
+cd openMVS
+mkdir build_dir
+cd build_dir
+EIGEN3_ROOT=../../eigen-3.4.0 \
+  VCG_ROOT=../../vcglib-2022.02 \
+  cmake .. -GNinja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX:PATH=~
+ninja
+ninja install
+```
+
+This will install openMVS binaries to `~/bin/OpenMVS/`.
+Run `export PATH=$HOME/bin/OpenMVS:$PATH` to add it to your path.
+Add that line to your `.bashrc` to make it permanent.
+Note: If eigen-3.4 doesn't get picked up, might need to change `EIGEN3_ROOT` to `Eigen3_Root` in the commands above
 
 ## 2. Training your first model!
 

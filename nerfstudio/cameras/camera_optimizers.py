@@ -35,6 +35,7 @@ from nerfstudio.configs.base_config import InstantiateConfig
 from nerfstudio.engine.optimizers import OptimizerConfig
 from nerfstudio.engine.schedulers import SchedulerConfig
 from nerfstudio.utils import poses as pose_utils
+from nerfstudio.cameras.cameras import Cameras
 
 
 @dataclass

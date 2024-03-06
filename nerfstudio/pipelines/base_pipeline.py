@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Type, Uni
 import torch
 import torch.distributed as dist
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+from PIL import Image
 from torch import nn
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn import Parameter
@@ -35,6 +36,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from nerfstudio.configs.base_config import InstantiateConfig
 from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
 from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager
+from nerfstudio.cameras.cameras import Cameras
+from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes
 from nerfstudio.models.base_model import Model, ModelConfig
@@ -262,7 +265,12 @@ class VanillaPipeline(Pipeline):
         ):
             pts = self.datamanager.train_dataparser_outputs.metadata["points3D_xyz"]
             pts_rgb = self.datamanager.train_dataparser_outputs.metadata["points3D_rgb"]
-            seed_pts = (pts, pts_rgb)
+            if "points3D_normal" in self.datamanager.train_dataparser_outputs.metadata:
+                # concatenate the normals to the seed points
+                pts_normals = self.datamanager.train_dataparser_outputs.metadata["points3D_normal"]
+                seed_pts = (pts, pts_rgb, pts_normals)
+            else:
+                seed_pts = (pts, pts_rgb)
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
@@ -319,10 +327,12 @@ class VanillaPipeline(Pipeline):
             step: current iteration step
         """
         self.eval()
+        print("SET TO EVAL")
         ray_bundle, batch = self.datamanager.next_eval(step)
         model_outputs = self.model(ray_bundle)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
         loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        print("SET TO TRAIN")
         self.train()
         return model_outputs, loss_dict, metrics_dict
 

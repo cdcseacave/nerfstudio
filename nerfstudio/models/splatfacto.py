@@ -157,6 +157,16 @@ class SplatfactoModelConfig(ModelConfig):
     """
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
+    rasterize_mode: Literal["classic", "antialiased"] = "classic"
+    """
+    Classic mode of rendering will use the EWA volume splatting with a [0.3, 0.3] screen space blurring kernel. This
+    approach is however not suitable to render tiny gaussians at higher or lower resolution than the captured, which
+    results "aliasing-like" artifacts. The antialiased mode overcomes this limitation by calculating compensation factors
+    and apply them to the opacities of gaussians to preserve the total integrated density of splats.
+
+    However, PLY exported with antialiased rasterize mode is not compatible with classic mode. Thus many web viewers that
+    were implemented for classic mode can not render antialiased mode PLY properly without modifications.
+    """
 
 
 class SplatfactoModel(Model):
@@ -182,6 +192,7 @@ class SplatfactoModel(Model):
             self.means = torch.nn.Parameter(self.seed_points[0])  # (Location, Color)
         else:
             self.means = torch.nn.Parameter((torch.rand((self.config.num_random, 3)) - 0.5) * self.config.random_scale)
+
         self.xys_grad_norm = None
         self.max_2Dsize = None
         distances, _ = self.k_nearest_sklearn(self.means.data, 3)
@@ -697,12 +708,6 @@ class SplatfactoModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
         self.last_size = (H, W)
         projmat = projection_matrix(0.001, 1000, fovx, fovy, device=self.device)
-        BLOCK_X, BLOCK_Y = 16, 16
-        tile_bounds = (
-            int((W + BLOCK_X - 1) // BLOCK_X),
-            int((H + BLOCK_Y - 1) // BLOCK_Y),
-            1,
-        )
 
         if crop_ids is not None:
             opacities_crop = self.opacities[crop_ids]
@@ -720,8 +725,8 @@ class SplatfactoModel(Model):
             quats_crop = self.quats
 
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
-
-        self.xys, depths, self.radii, conics, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
+        BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
+        self.xys, depths, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
             means_crop,
             torch.exp(scales_crop),
             1,
@@ -734,7 +739,7 @@ class SplatfactoModel(Model):
             cy,
             H,
             W,
-            tile_bounds,
+            BLOCK_WIDTH,
         )  # type: ignore
         if (self.radii).sum() == 0:
             rgb = background.repeat(int(camera.height.item()), int(camera.width.item()), 1)
@@ -743,7 +748,7 @@ class SplatfactoModel(Model):
             return {"rgb": rgb, "depth": depth, "accumulation": accumulation}
 
         # Important to allow xys grads to populate properly
-        if self.training:
+        if self.training and self.xys.requires_grad:
             self.xys.retain_grad()
 
         if self.config.sh_degree > 0:
@@ -755,8 +760,18 @@ class SplatfactoModel(Model):
         else:
             rgbs = torch.sigmoid(colors_crop[:, 0, :])
 
+        # apply the compensation of screen space blurring to gaussians
+        opacities = None
+        if self.config.rasterize_mode == "antialiased":
+            opacities = torch.sigmoid(opacities_crop) * comp[:, None]
+        elif self.config.rasterize_mode == "classic":
+            opacities = torch.sigmoid(opacities_crop)
+        else:
+            raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
+
         # rescale the camera back to original dimensions
         camera.rescale_output_resolution(camera_downscale)
+        
         assert (num_tiles_hit > 0).any()  # type: ignore
         rgb, alpha = rasterize_gaussians(  # type: ignore
             self.xys,
@@ -765,9 +780,10 @@ class SplatfactoModel(Model):
             conics,
             num_tiles_hit,  # type: ignore
             rgbs,
-            torch.sigmoid(opacities_crop),
+            opacities,
             H,
             W,
+            BLOCK_WIDTH,
             background=background,
             return_alpha=True,
         )  # type: ignore
@@ -782,9 +798,10 @@ class SplatfactoModel(Model):
                 conics,
                 num_tiles_hit,  # type: ignore
                 depths[:, None].repeat(1, 3),
-                torch.sigmoid(opacities_crop),
+                opacities,
                 H,
                 W,
+                BLOCK_WIDTH,
                 background=torch.zeros(3, device=self.device),
             )[..., 0:1]  # type: ignore
             depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
@@ -921,3 +938,9 @@ class SplatfactoModel(Model):
         images_dict = {"img": combined_rgb}
 
         return metrics_dict, images_dict
+
+    @property
+    def get_colors(self):
+        color = self.colors
+        shs_rest = self.shs_rest
+        return torch.cat((color[:,None,:], shs_rest), dim=1)
