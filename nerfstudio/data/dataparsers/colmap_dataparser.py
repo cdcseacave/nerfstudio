@@ -170,7 +170,8 @@ class ColmapDataParser(DataParser):
             c2w[0:3, 1:3] *= -1
             if self.config.assume_colmap_world_coordinate_convention:
                 # world coordinate transform: map colmap gravity guess (-y) to nerfstudio convention (+z)
-                c2w = c2w[np.array([0, 2, 1, 3]), :]
+                c2w = c2w[np.array([1, 0, 2, 3]), :] # old
+                #c2w = c2w[np.array([0, 2, 1, 3]), :] # latest
                 c2w[2, :] *= -1
 
             frame = {
@@ -206,7 +207,8 @@ class ColmapDataParser(DataParser):
         if self.config.assume_colmap_world_coordinate_convention:
             # world coordinate transform: map colmap gravity guess (-y) to nerfstudio convention (+z)
             applied_transform = np.eye(4)[:3, :]
-            applied_transform = applied_transform[np.array([0, 2, 1]), :]
+            applied_transform = applied_transform[np.array([1, 0, 2]), :] # old
+            #applied_transform = applied_transform[np.array([0, 2, 1]), :] # latest
             applied_transform[2, :] *= -1
             out["applied_transform"] = applied_transform.tolist()
         out["camera_model"] = camera_model
@@ -440,6 +442,8 @@ class ColmapDataParser(DataParser):
             if len(pcd.points) < 1000:
                 raise RuntimeError(f'Dense point cloud {pcd} has too few points')
             CONSOLE.log(f'Loaded dense point cloud with {len(pcd.points)} points')
+            pcd.transform(np.vstack([transform_matrix.numpy(), [0, 0, 0, 1]]))
+            pcd.scale(scale_factor, center=np.array([0, 0, 0]))
             if len(pcd.points) > self.config.max_dense_points_before_downsampling:
                 voxel_size = 0.005
                 while True:
@@ -449,8 +453,6 @@ class ColmapDataParser(DataParser):
                     voxel_size *= 1.25
                 pcd = downsampled
                 CONSOLE.log(f'Downsampled dense point cloud to {len(pcd.points)} points, using voxel size {voxel_size}')
-            pcd.transform(np.vstack([transform_matrix.numpy(), [0, 0, 0, 1]]))
-            pcd.scale(scale_factor, center=np.array([0, 0, 0]))
             out = {
                 "points3D_xyz": torch.from_numpy(np.array(pcd.points, dtype=np.float32)),
                 "points3D_rgb": torch.from_numpy(np.array(pcd.colors) * 255),

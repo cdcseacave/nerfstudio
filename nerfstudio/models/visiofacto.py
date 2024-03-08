@@ -87,7 +87,7 @@ class VisiofactoModelConfig(ModelConfig):
     """if a gaussian is more than this percent of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
-    sh_degree: int = 3  # splatfacto: 3, gaussian splatting: 2
+    sh_degree: int = 2  # splatfacto: 3, gaussian splatting: 2
     """maximum degree of spherical harmonics to use"""
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
@@ -104,7 +104,7 @@ class VisiofactoModelConfig(ModelConfig):
     """Sets the defaults in method_configs.py.
        Multiple config values will be messed up if num_iterations is set via the command line arg.
        Change it here instead"""
-    max_gaussians: int = 3000000
+    max_gaussians: int = 5000000
     """Max number of 3D gaussians.
        As this number is approached, densify_grad_thresh is increased to slow down densification.
        It's possible for n_gaussians to go over this number by a bit, but is unlikely"""
@@ -139,14 +139,12 @@ class VisiofactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     """Size of the cube to initialize random gaussians within"""
-    init_pts_sphere_on_iter: int = -1
-    """-1 to initialize immediately. Higher value to initialize later in the optimization"""
     init_pts_sphere_num: int = 20000
     """Initialize gaussians at a sphere with this many randomly placed points. Set to 0 to disable"""
     init_pts_sphere_rad_pct: float = 0.98
     """Initialize gaussians at a sphere: set radius based on looking at the 99th percentile
        of initial points' distance from origin"""
-    init_pts_sphere_rad_mult: float = 1.1
+    init_pts_sphere_rad_mult: float = 1.5
     """Initialize gaussians at a sphere: set radius based on init_pts_sphere_rad_pct * this value"""
     init_pts_sphere_rad_min: float = 5.0
     """Initialize gaussians at a sphere with this as the minimum radius"""
@@ -172,7 +170,7 @@ class VisiofactoModelConfig(ModelConfig):
     """Penalty for gaussians going under the outer hemisphere"""
     scale_lambda: float = 1
     """ Weight of scale loss """
-    opacity_lambda: float = 0.0005
+    opacity_lambda: float = 0.00003
     """ Weight of opacity loss (0 to disable) """
     opacity_binarization_lambda: float = 0.0
     """ Weight of opacity binarization loss (0 to disable) """
@@ -250,15 +248,6 @@ class VisiofactoModel(Model):
         if self.config.init_pts_hemisphere:
             means[(means[:, 2] < self.outer_sphere_z_low).squeeze(), 2] = self.outer_sphere_z_low
 
-    def get_init_sphere_means(self):
-        sphere_pts = (torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2
-        dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
-        rescale = self.outer_sphere_rad / (dists + 1e-8)
-        sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
-        if self.config.init_pts_hemisphere:
-            sphere_pts[(sphere_pts[:, 2] < self.outer_sphere_z_low).squeeze(), 2] = self.outer_sphere_z_low
-        return sphere_pts
-
     def add_to_model(self, params):
         for k, v in params.items():
             newval = torch.nn.Parameter(torch.cat([getattr(self, k).detach(), v.to(getattr(self, k).device)], dim=0))
@@ -291,16 +280,26 @@ class VisiofactoModel(Model):
             )
         return scales, quats
 
+    def get_init_sphere_means(self):
+        sphere_pts = (torch.rand((self.config.init_pts_sphere_num, 3)) - 0.5) * 2
+        dists = torch.linalg.vector_norm(sphere_pts, dim=1, keepdim=True)
+        rescale = self.outer_sphere_rad / (dists + 1e-8)
+        sphere_pts = sphere_pts * torch.cat([rescale, rescale, rescale], dim=1)
+        if self.config.init_pts_hemisphere:
+            sphere_pts = sphere_pts[(sphere_pts[:, 2] > self.outer_sphere_z_low).squeeze()]
+        return sphere_pts
+
     def get_init_sphere_pts(self):
         new_pts = {}
         if self.config.init_pts_sphere_num <= 0:
             return new_pts
         dim_sh = num_sh_bases(self.config.sh_degree)
         new_pts['means'] = self.get_init_sphere_means()
-        new_pts['features_dc'] = torch.rand(self.config.init_pts_sphere_num, 3)
-        new_pts['features_rest'] = torch.zeros((self.config.init_pts_sphere_num, dim_sh - 1, 3))
+        pts_sphere_num = new_pts['means'].shape[0]
+        new_pts['features_dc'] = torch.rand(pts_sphere_num, 3)
+        new_pts['features_rest'] = torch.zeros((pts_sphere_num, dim_sh - 1, 3))
         new_pts['scales'], new_pts['quats'] = self.init_scale_rotation(new_pts['means'], -new_pts['means'] / self.outer_sphere_rad)
-        new_pts['opacities'] = torch.logit(0.1 * torch.ones(self.config.init_pts_sphere_num, 1))
+        new_pts['opacities'] = torch.logit(0.1 * torch.ones(pts_sphere_num, 1))
         return new_pts
 
     def populate_modules(self):
@@ -344,10 +343,10 @@ class VisiofactoModel(Model):
             self.outer_sphere_z_low = self.get_init_bottom_plane()
             CONSOLE.log(f"Initializing bottom of hemisphere to {self.outer_sphere_z_low}")
         # Init outer sphere points
-        if self.config.init_pts_sphere_on_iter < 0 and self.training:
+        if self.training:
             new_pts = self.get_init_sphere_pts()
-            self.add_to_model(new_pts)
-            if new_pts.keys():
+            if len(new_pts) > 0:
+                self.add_to_model(new_pts)
                 CONSOLE.log(f"Initializing {new_pts['means'].shape[0]} 3D gaussians on a "
                             f"{'hemi' if self.config.init_pts_hemisphere else ''}sphere at radius = {self.outer_sphere_rad}")
 
@@ -682,20 +681,6 @@ class VisiofactoModel(Model):
             self.vis_counts = None
             self.max_2Dsize = None
 
-    def add_sphere_pts(self, optimizers: Optimizers, step):
-        if self.config.init_pts_sphere_on_iter != self.step or self.config.init_pts_sphere_num <= 0:
-            return
-        self.add_init_sphere_pts()
-        if self.max_2Dsize is not None:  # append zeros to the max_2Dsize tensor
-            sphere_max_2Dsize = torch.nn.Parameter(torch.zeros((self.config.init_pts_sphere_num)).cuda())
-            self.max_2Dsize = torch.cat([self.max_2Dsize, sphere_max_2Dsize], dim=0)
-        self.xys_grad_norm = None
-        self.vis_counts = None
-        self.max_2Dsize = None
-        param_groups = self.get_param_groups()
-        for group, param in param_groups.items():
-            self.add_to_optim(optimizers.optimizers[group], param, self.config.init_pts_sphere_num)
-
     def refinement_last(self, optimizers: Optimizers, step):
         if step != (self.early_stop_at_step or self.config.max_iterations) - 1:
             return
@@ -826,13 +811,6 @@ class VisiofactoModel(Model):
                 [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
                 self.refinement_after,
                 update_every_num_iters=self.config.refine_every,
-                args=[training_callback_attributes.optimizers],
-            )
-        )
-        cbs.append(
-            TrainingCallback(
-                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                self.add_sphere_pts,
                 args=[training_callback_attributes.optimizers],
             )
         )

@@ -715,11 +715,7 @@ class ExportGaussianSplat(Exporter):
             camera_id_to_camera = colmap_utils.read_cameras_binary(distorted_colmap_path / 'cameras.bin')
             image_id_to_image = colmap_utils.read_images_binary(distorted_colmap_path / 'images.bin')
 
-            print("Available frames are")
-            print([f['name'] for f in frames])
-
             for image_id, image in image_id_to_image.items():
-                print("Searching for", image.name)
                 try:
                     frame = next(f for f in frames if f['name'] == image.name)
                 except StopIteration:
