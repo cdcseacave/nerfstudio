@@ -32,7 +32,7 @@ def prepare_images(
     path: Path,
     sequential: bool = False,
     densify: bool = True,
-    dense_resolution: int = 1024,
+    dense_resolution: int = 512,
     clean: bool = False,
     gpu_index: int = 0,
 ):
@@ -130,12 +130,13 @@ def prepare_images(
             [
                 'DensifyPointCloud',
                 '--crop-to-roi=0',
+                '--remove-dmaps=1',
                 '--resolution-level=0',
                 '--max-resolution',
                 str(dense_resolution),
                 'scene.mvs',
                 '-o',
-                path / 'dense.ply',
+                'dense.ply',
             ],
             cwd=path,
             check=True,
