@@ -408,7 +408,6 @@ class VisiofactoModel(Model):
         self.features_rest = torch.nn.Parameter(
             torch.zeros(newp, num_sh_bases(self.config.sh_degree) - 1, 3, device=self.device)
         )
-        # TODO: Could colors be transposed? See gaussian_splatting.py.
         super().load_state_dict(dict, **kwargs)
 
     def k_nearest_sklearn(self, x: torch.Tensor, k: int):
