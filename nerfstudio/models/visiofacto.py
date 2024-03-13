@@ -299,7 +299,8 @@ class VisiofactoModel(Model):
         new_pts['features_dc'] = torch.rand(pts_sphere_num, 3)
         new_pts['features_rest'] = torch.zeros((pts_sphere_num, dim_sh - 1, 3))
         new_pts['scales'], new_pts['quats'] = self.init_scale_rotation(new_pts['means'], -new_pts['means'] / self.outer_sphere_rad)
-        new_pts['opacities'] = torch.logit(0.9 * torch.ones(pts_sphere_num, 1))
+        default_opacity = 0.9 if self.config.opacity_lambda > 0 else 0.1
+        new_pts['opacities'] = torch.logit(default_opacity * torch.ones(pts_sphere_num, 1))
         return new_pts
 
     def populate_modules(self):
