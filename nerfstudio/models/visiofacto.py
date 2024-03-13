@@ -964,7 +964,8 @@ class VisiofactoModel(Model):
             rgb = background.repeat(int(camera.height.item()), int(camera.width.item()), 1)
             depth = background.new_ones(*rgb.shape[:2], 1) * 10
             accumulation = background.new_zeros(*rgb.shape[:2], 1)
-            return {"rgb": rgb, "depth": depth, "accumulation": accumulation}
+            return {"rgb": rgb, "depth": depth, "means_rendered": means_crop, "depths_rendered": depths,
+                    "sh": colors_crop, "accumulation": accumulation}
 
         # Important to allow xys grads to populate properly
         if self.training and xys.requires_grad:
@@ -1029,7 +1030,8 @@ class VisiofactoModel(Model):
             with torch.no_grad():
                 self.gaussians_camera_cnt[radii > 0] += 1
 
-        return {"rgb": rgb, "depth": depth_im, "accumulation": alpha}  # type: ignore
+        return {"rgb": rgb, "depth": depth_im, "means_rendered": means_crop, "depths_rendered": depths,
+                "sh": colors_crop, "accumulation": alpha}
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
@@ -1158,6 +1160,14 @@ class VisiofactoModel(Model):
             losses["opacity"] = self.opacities.mean() * self.config.opacity_lambda * torch.sigmoid(0.01*(self.step - torch.tensor(1000))) * (1-torch.sigmoid(0.01*(self.step - torch.tensor(self.config.min_iterations))))
         if self.config.opacity_binarization_lambda > 0.0:
             losses["binarize_opacity"] = torch.square(torch.square(1/(3*math.sqrt(2))*(self.opacities+6)-2/math.sqrt(2)) - 1/2).mean() * self.config.opacity_binarization_lambda * torch.sigmoid(0.01*(self.step - torch.tensor(self.config.min_iterations)))
+        if self.config.regularize_sh_lambda > 0.0:  # Penalize for high spherical harmonics values
+            losses["sh_reg"] = self.get_sh_regularization_loss(outputs["sh"]) * self.config.regularize_sh_lambda
+        if self.config.dist2cam_loss_lambda > 0.0:
+            losses["depth_L1"] = self.get_depth_loss(outputs["depths_rendered"]) * self.config.dist2cam_loss_lambda
+        if self.config.outside_outer_sphere_lambda > 0.0:
+            losses["outer_sphere_L2"] = self.get_outer_sphere_loss(outputs["means_rendered"]) * self.config.outside_outer_sphere_lambda
+        if self.config.under_hemisphere_lambda > 0.0:
+            losses["under_hemisphere_L2"] = self.get_under_hemisphere_loss(outputs["means_rendered"]) * self.config.under_hemisphere_lambda
 
         return losses
 
