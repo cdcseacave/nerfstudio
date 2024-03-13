@@ -66,7 +66,7 @@ class VisiofactoModelConfig(ModelConfig):
     """at the beginning, resolution is 1/2^d, where d is this number"""
     cull_alpha_thresh: float = 0.1  # splatfacto: 0.1, gaussian splatting: 0.01
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 0.5  # splatfacto: 0.5, gaussian splatting: 10.0
+    cull_scale_thresh: float = 10  # splatfacto: 0.5, gaussian splatting: 10.0
     """threshold of scale for culling huge gaussians"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
