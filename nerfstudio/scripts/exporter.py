@@ -30,30 +30,37 @@ from typing import List, Optional, Tuple, Union, cast
 import mediapy
 import numpy as np
 import open3d as o3d
-from pyquaternion import Quaternion
 import torch
 import tyro
+from pyquaternion import Quaternion
 from typing_extensions import Annotated, Literal
 
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
-from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager, FullImageDatamanagerConfig
-from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
-from nerfstudio.data.dataparsers.colmap_dataparser import ColmapDataParserConfig
+from nerfstudio.data.datamanagers.full_images_datamanager import (
+    FullImageDatamanager, FullImageDatamanagerConfig)
+from nerfstudio.data.datamanagers.parallel_datamanager import \
+    ParallelDataManager
+from nerfstudio.data.dataparsers.colmap_dataparser import \
+    ColmapDataParserConfig
 from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
-from nerfstudio.exporter.exporter_utils import collect_camera_poses, generate_point_cloud, get_mesh_from_filename, export_frame_render
-from nerfstudio.exporter.marching_cubes import generate_mesh_with_multires_marching_cubes
+from nerfstudio.exporter.exporter_utils import (collect_camera_poses,
+                                                export_frame_render,
+                                                generate_point_cloud,
+                                                get_mesh_from_filename)
+from nerfstudio.exporter.marching_cubes import \
+    generate_mesh_with_multires_marching_cubes
 from nerfstudio.fields.sdf_field import SDFField  # noqa
 from nerfstudio.models.splatfacto import SplatfactoModel
+from nerfstudio.models.visiofacto import VisiofactoModel
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.process_data import colmap_utils
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
-from nerfstudio.models.visiofacto import VisiofactoModel
 
 # import seaborn as sns
 # import matplotlib.pyplot as plt
@@ -785,254 +792,6 @@ class ExportGaussianSplat(Exporter):
         normals = np.array([Quaternion(quat).rotation_matrix[:, index].astype(np.float32) for quat, index in zip(quats, smallest_scale_index)])
     
         return normals
-
-
-
-@dataclass
-class ExportGaussianSplat(Exporter):
-    """
-    Export 3D Gaussian Splatting model to a .ply
-    """
-
-    output_dir: Optional[Path] = None
-    load_step: Optional[int] = None
-    transform_to_colmap_coordinates: bool = False
-
-    thumbnail_size: int = 512
-    thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
-
-    def main(self) -> None:
-        if self.output_dir is None:
-            self.output_dir = self.load_config.parent
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True)
-
-        def update_config_callback(config: TrainerConfig):
-            assert isinstance(config.pipeline.datamanager, FullImageDatamanagerConfig)
-            assert isinstance(config.pipeline.datamanager.dataparser, ColmapDataParserConfig)
-            config.pipeline.datamanager.dataparser.load_3D_points = False
-            config.pipeline.datamanager.cache_images = 'no-cache'
-            config.load_step = self.load_step
-            return config
-
-        _, pipeline, _, step = eval_setup(self.load_config,
-                                          update_config_callback=update_config_callback)
-
-        assert isinstance(pipeline.model, GaussianSplattingModel)
-        assert isinstance(pipeline.datamanager, FullImageDatamanager)
-
-        model: GaussianSplattingModel = pipeline.model
-
-        filename = self.output_dir / "point_cloud.ply"
-
-        data = np.zeros(model.means.shape[0], dtype=np.dtype([
-            # Position
-            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            # Always zero
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-            # 0-th order spherical harmonics
-            ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
-            # Three orders of spherical harmonics, regardless of how many we actually have
-            *[(f'f_rest_{i}', 'f4') for i in range(45)],
-            # Sigmoid of the opacity
-            ('opacity', 'f4'),
-            # Log of the scale
-            ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
-            # Rotation quaternion
-            ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
-        ]))
-
-        with torch.no_grad():
-            positions = model.means.cpu().numpy()
-            data['x'] = positions[:, 0]
-            data['y'] = positions[:, 1]
-            data['z'] = positions[:, 2]
-
-            data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
-
-            colors = model.get_colors.cpu().numpy()
-            scales = model.scales.cpu().numpy()
-            quats = model.quats.cpu().numpy()
-
-        data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
-        data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
-        data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
-        sh_count = colors.shape[1] - 1
-        for c in range(3):
-            for i in range(sh_count):
-                data[f'f_rest_{c * 15 + i}'] = colors[:, i + 1, c].reshape(data.shape)
-
-        data['scale_0'] = scales[:, 0].reshape(data.shape)
-        data['scale_1'] = scales[:, 1].reshape(data.shape)
-        data['scale_2'] = scales[:, 2].reshape(data.shape)
-
-        data['rot_0'] = quats[:, 0].reshape(data.shape)
-        data['rot_1'] = quats[:, 1].reshape(data.shape)
-        data['rot_2'] = quats[:, 2].reshape(data.shape)
-        data['rot_3'] = quats[:, 3].reshape(data.shape)
-
-        with open(filename, mode='wb') as f:
-            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
-        CONSOLE.print(f'Wrote {filename}')
-
-        frames_json = self.get_frames_json(pipeline.datamanager)
-        with open(self.output_dir / "frames.json", "w") as f:
-            json.dump(frames_json, f)
-        CONSOLE.print(f'Wrote {self.output_dir / "frames.json"}')
-
-        initial_camera_transform = self.get_initial_camera_transform(pipeline.datamanager)
-
-        scale_transform = np.eye(4)
-        scale_transform[:3, :3] *= pipeline.datamanager.train_dataparser_outputs.dataparser_scale
-        dataparser_transform = np.vstack([
-            pipeline.datamanager.train_dataparser_outputs.dataparser_transform.numpy(),
-            [0, 0, 0, 1],
-        ])
-        # dataparser_transform is applied before scaling
-        input_transform = scale_transform @ dataparser_transform
-
-        with open(self.output_dir / "splat_info.json", "w") as f:
-            json.dump({
-                # Camera pose of the first image in the dataset, as a column-major 4x4 matrix.
-                'initialCameraTransform': initial_camera_transform.ravel('F').tolist(),
-                # Transformation matrix applied to colmap poses to convert them to the same
-                # coordinate system as the output splats.
-                'inputTransform': input_transform.ravel('F').tolist(),
-                'steps': step + 1,
-            }, f)
-        CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
-
-        with torch.no_grad():
-            fov = math.radians(self.thumbnail_fov)
-            w = h = self.thumbnail_size
-            cx = cy = w / 2.
-            fx = fy = cx / math.tan(fov / 2)
-            thumbnail_camera = Cameras(
-                camera_to_worlds=torch.from_numpy(initial_camera_transform[:3]).to(torch.float32),
-                fx=fx,
-                fy=fy,
-                cx=cx,
-                cy=cy,
-                width=w,
-                height=h,
-            )
-            output = model.get_outputs(thumbnail_camera.reshape((1,)).to(model.device))['rgb'].cpu()
-        mediapy.write_image(self.output_dir / 'render.png', output)
-        CONSOLE.print(f'Wrote {self.output_dir / "render.png"}')
-
-        if self.transform_to_colmap_coordinates:
-            self.write_transformed_ply(
-                data=data, positions=positions, scales=scales,
-                rotation_transform=dataparser_transform,
-                position_transform=input_transform,
-                scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
-            )
-
-    def write_transformed_ply(
-        self,
-        data: np.ndarray,
-        positions: np.ndarray,
-        scales: np.ndarray,
-        rotation_transform: np.ndarray,
-        position_transform: np.ndarray,
-        scale_transform: float,
-    ):
-        filename = self.output_dir / 'transformed.ply'
-        transformed_positions = np.linalg.inv(position_transform) @ np.concatenate([
-            positions,
-            np.ones((positions.shape[0], 1)),
-        ], axis=1).T
-        data['x'] = transformed_positions[0]
-        data['y'] = transformed_positions[1]
-        data['z'] = transformed_positions[2]
-        transformed_scales = torch.sigmoid(torch.from_numpy(scales))
-        transformed_scales = (transformed_scales / scale_transform).T
-        transformed_scales = torch.logit(transformed_scales).numpy()
-        data['scale_0'] = transformed_scales[0]
-        data['scale_1'] = transformed_scales[1]
-        data['scale_2'] = transformed_scales[2]
-        rotation_transform = Quaternion(matrix=np.linalg.inv(rotation_transform))
-        for i in range(len(data['rot_0'])):
-            quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
-            quat = rotation_transform * quat
-            data['rot_0'][i] = quat[0]
-            data['rot_1'][i] = quat[1]
-            data['rot_2'][i] = quat[2]
-            data['rot_3'][i] = quat[3]
-        with open(filename, mode='wb') as f:
-            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
-        CONSOLE.print(f'Wrote {filename}')
-
-    def get_frames_json(self, datamanager: FullImageDatamanager):
-        frames = []
-        for i, path in enumerate(datamanager.train_dataset.image_filenames):
-            transform = np.vstack([
-                datamanager.train_dataset.cameras[i].camera_to_worlds.numpy(),
-                [0, 0, 0, 1],
-            ])
-            frames.append({
-                'name': path.name,
-                # Column-major 4x4 camera-to-worlds transform matrix for the camera pose.
-                # This matches the frames.json that we write out for object capture.
-                'transform': transform.ravel('F').tolist(),
-            })
-        frames = sorted(frames, key=lambda f: f['name'])
-
-        distorted_colmap_path = datamanager.config.data / 'distorted_model'
-        if distorted_colmap_path.exists():
-            camera_id_to_camera = colmap_utils.read_cameras_binary(distorted_colmap_path / 'cameras.bin')
-            image_id_to_image = colmap_utils.read_images_binary(distorted_colmap_path / 'images.bin')
-            for image_id, image in image_id_to_image.items():
-                frame = next(f for f in frames if f['name'] == image.name)
-                camera = camera_id_to_camera[image.camera_id]
-                frame['params'] = colmap_utils.parse_colmap_camera_params(camera)
-                frame['params']['fx'] = frame['params'].pop('fl_x')
-                frame['params']['fy'] = frame['params'].pop('fl_y')
-                # For camera model OPENCV, this writes out w, h, fx, fy, cx, cy, k1, k2, p1, p2.
-        else:
-            CONSOLE.print(f'No distorted model found at {distorted_colmap_path}. '+
-                          'Not writing distortion params to frames.json.')
-
-        return frames
-
-    def get_initial_camera_transform(self, datamanager: FullImageDatamanager) -> np.array:
-        assert isinstance(datamanager.train_dataset, InputDataset)
-        first_few_image_idx = sorted(
-            range(len(datamanager.train_dataset.image_filenames)),
-            key=lambda i: datamanager.train_dataset.image_filenames[i],
-        )[:10]
-        cameras = [datamanager.train_dataset.cameras[i] for i in first_few_image_idx]
-        camera_transforms = [camera.camera_to_worlds.numpy() for camera in cameras]
-
-        # We use --center_method="focus", so the origin of the coordinate system is the focus.
-        focus = np.zeros(3)
-        # Average distance from each camera to the focus point.
-        avg_distance = np.mean([np.linalg.norm(t[:3, 3] - focus) for t in camera_transforms])
-        # Back up each camera by 0.25x the average distance.
-        new_positions = [t @ np.array([0, 0, avg_distance * 0.25, 1]) for t in camera_transforms]
-        # Average the new positions together, maintaining distance to the focus.
-        new_position = self.average_position(new_positions, focus)
-
-        # Point the camera in the same direction as the average camera, while aligning the up direction with the world.
-        # (Z-axis points behind the camera in the camera's coordinate frame and up in the world's coordinate frame.)
-        new_z = np.mean([t[:3, 2] for t in camera_transforms], axis=0)
-        new_z /= np.linalg.norm(new_z)
-        new_x = np.cross(np.array([0, 0, 1]), new_z)
-        new_x /= np.linalg.norm(new_x)
-        new_y = np.cross(new_z, new_x)
-
-        new_transform = np.vstack([
-            np.stack([new_x, new_y, new_z, new_position], axis=1),
-            np.array([0, 0, 0, 1]),
-        ])
-
-        return new_transform
-
-    def average_position(self, positions: np.array, focus: np.array) -> np.array:
-        avg_distance = np.mean([np.linalg.norm(p - focus) for p in positions])
-        avg_direction = np.mean([p - focus for p in positions], axis=0)
-        avg_direction /= np.linalg.norm(avg_direction)
-        return focus + avg_direction * avg_distance
 
 
 Commands = tyro.conf.FlagConversionOff[
