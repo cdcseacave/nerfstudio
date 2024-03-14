@@ -579,7 +579,6 @@ class ExportGaussianSplat(Exporter):
             positions = model.means.cpu().numpy()
             n = positions.shape[0]
             map_to_tensors["positions"] = positions
-            map_to_tensors["normals"] = np.zeros_like(positions, dtype=np.float32)
 
             if model.config.sh_degree > 0:
                 shs_0 = model.shs_0.contiguous().cpu().numpy()
@@ -604,6 +603,8 @@ class ExportGaussianSplat(Exporter):
             quats = model.quats.data.cpu().numpy()
             for i in range(4):
                 map_to_tensors[f"rot_{i}"] = quats[:, i, None]
+            
+            map_to_tensors["normals"] = self.estimate_normals(np.exp(scales), quats)
 
         # post optimization, it is possible have NaN/Inf values in some attributes
         # to ensure the exported ply file has finite values, we enforce finite filters.
@@ -770,6 +771,20 @@ class ExportGaussianSplat(Exporter):
         avg_direction = np.mean([p - focus for p in positions], axis=0)
         avg_direction /= np.linalg.norm(avg_direction)
         return focus + avg_direction * avg_distance
+
+    def estimate_normals(
+        self,
+        scales: np.ndarray,
+        quats: np.ndarray,
+    ) -> np.ndarray:
+        assert len(scales) == len(quats), "The length of 'scales' and 'quats' must be the same."
+    
+        scale_sorted_indices = np.argsort(scales)
+        smallest_scale_index = scale_sorted_indices[:, 0]
+    
+        normals = np.array([Quaternion(quat).rotation_matrix[:, index].astype(np.float32) for quat, index in zip(quats, smallest_scale_index)])
+    
+        return normals
 
 
 

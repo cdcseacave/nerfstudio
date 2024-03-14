@@ -168,7 +168,7 @@ class VisiofactoModelConfig(ModelConfig):
     """Penalty for gaussians going outside the outer sphere"""
     under_hemisphere_lambda: float = 1.0
     """Penalty for gaussians going under the outer hemisphere"""
-    scale_lambda: float = 1
+    scale_lambda: float = 0.01
     """ Weight of scale loss """
     opacity_lambda: float = 0.00003
     """ Weight of opacity loss (0 to disable) """
@@ -663,7 +663,7 @@ class VisiofactoModel(Model):
             # only split/cull if we've seen every image since opacity reset
             reset_interval = self.config.reset_alpha_every * self.config.refine_every
             do_densification = (
-                    self.step < self.config.stop_refine_at_step and self.step < 9000
+                    self.step < self.config.stop_refine_at_step and self.step < self.config.min_iterations
                     and self.step % reset_interval > self.num_train_data + self.config.refine_every
                     and self.num_points < self.config.max_gaussians
                     and self.early_stop_at_step is None
@@ -676,6 +676,19 @@ class VisiofactoModel(Model):
             elif self.config.continue_cull_post_densification: # and self.step >= self.config.stop_refine_at_step:
                 deleted_mask = self.get_cull_gaussians()
                 self.cull_gaussians(deleted_mask, optimizers)
+
+            if self.step // self.config.refine_every % self.config.reset_alpha_every == 0:
+                reset_value = self.config.cull_alpha_thresh * 0.9
+                self.opacities.data = torch.clamp(
+                    self.opacities.data,
+                    max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
+                )
+                # reset the exp of optimizer
+                optim = optimizers.optimizers["opacity"]
+                param = optim.param_groups[0]["params"][0]
+                param_state = optim.state[param]
+                param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+                param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
 
             self.xys_grad_norm = None
             self.vis_counts = None
@@ -745,6 +758,7 @@ class VisiofactoModel(Model):
             self.remove_from_all_optim(optimizers, culls)
 
         return culls
+
     def split_gaussians(self, split_mask, samps):
         """
         This function splits gaussians that are too large
@@ -1147,15 +1161,18 @@ class VisiofactoModel(Model):
             "main": main_loss,
         }
 
-        if self.config.use_scale_regularization:
+        if self.config.scale_lambda or self.config.use_scale_regularization:
             scale_exp = torch.exp(self.scales)
-            losses["scale_reg"] = (
+            if self.config.scale_lambda:
+                losses["scale"] = scale_exp.amin(dim=-1).mean() * self.config.scale_lambda  # Penalize for high scale values
+            if self.config.use_scale_regularization:
+                losses["scale_reg"] = (
                         torch.maximum(
                             scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
                             torch.tensor(self.config.max_gauss_ratio)
                         )
                         - self.config.max_gauss_ratio
-                ).mean() * 0.1
+                ).mean() * 0.1  # Penalize for high scale ratio values
         if self.config.opacity_lambda > 0.0:
             losses["opacity"] = self.opacities.mean() * self.config.opacity_lambda * torch.sigmoid(0.01*(self.step - torch.tensor(1000))) * (1-torch.sigmoid(0.01*(self.step - torch.tensor(self.config.min_iterations))))
         if self.config.opacity_binarization_lambda > 0.0:
