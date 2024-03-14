@@ -62,7 +62,7 @@ class VisiofactoModelConfig(ModelConfig):
     """training starts at 1/d resolution, every n steps this is doubled"""
     background_color: Literal["random", "black", "white"] = "random"
     """Whether to randomize the background color."""
-    num_downscales: int = 0  # splatfacto: 0, gaussian splatting: 2
+    num_downscales: int = 1  # splatfacto: 0, gaussian splatting: 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
     cull_alpha_thresh: float = 0.1  # splatfacto: 0.1, gaussian splatting: 0.01
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
@@ -663,7 +663,7 @@ class VisiofactoModel(Model):
             # only split/cull if we've seen every image since opacity reset
             reset_interval = self.config.reset_alpha_every * self.config.refine_every
             do_densification = (
-                    self.step < self.config.stop_refine_at_step and self.step < self.config.min_iterations
+                    self.step < min(self.config.stop_refine_at_step, self.config.min_iterations)
                     and self.step % reset_interval > self.num_train_data + self.config.refine_every
                     and self.num_points < self.config.max_gaussians
                     and self.early_stop_at_step is None
@@ -677,18 +677,19 @@ class VisiofactoModel(Model):
                 deleted_mask = self.get_cull_gaussians()
                 self.cull_gaussians(deleted_mask, optimizers)
 
-            if self.step // self.config.refine_every % self.config.reset_alpha_every == 0:
-                reset_value = self.config.cull_alpha_thresh * 0.9
-                self.opacities.data = torch.clamp(
-                    self.opacities.data,
-                    max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
-                )
-                # reset the exp of optimizer
-                optim = optimizers.optimizers["opacity"]
-                param = optim.param_groups[0]["params"][0]
-                param_state = optim.state[param]
-                param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
-                param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+            # Reduces even more the numver of splats but at the cost of ~0.5 PSNR
+            # if self.step < min((self.early_stop_at_step or self.config.max_iterations) - self.config.early_stop_additional_steps, self.config.min_iterations) and self.step % reset_interval == self.config.refine_every:
+            #     reset_value = self.config.cull_alpha_thresh * 3.0
+            #     self.opacities.data = torch.clamp(
+            #         self.opacities.data,
+            #         max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
+            #     )
+            #     # reset the exp of optimizer
+            #     optim = optimizers.optimizers["opacity"]
+            #     param = optim.param_groups[0]["params"][0]
+            #     param_state = optim.state[param]
+            #     param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+            #     param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
 
             self.xys_grad_norm = None
             self.vis_counts = None
