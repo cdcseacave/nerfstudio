@@ -30,38 +30,40 @@ from typing import List, Optional, Tuple, Union, cast
 import mediapy
 import numpy as np
 import open3d as o3d
-from plyfile import PlyData, PlyElement
-from pyquaternion import Quaternion
 import torch
 import tyro
+from pyquaternion import Quaternion
 from typing_extensions import Annotated, Literal
 
-from nerfstudio.cameras import camera_utils
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
-from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager, FullImageDatamanagerConfig
-from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
-from nerfstudio.data.dataparsers.colmap_dataparser import ColmapDataParserConfig
+from nerfstudio.data.datamanagers.full_images_datamanager import (
+    FullImageDatamanager, FullImageDatamanagerConfig)
+from nerfstudio.data.datamanagers.parallel_datamanager import \
+    ParallelDataManager
+from nerfstudio.data.dataparsers.colmap_dataparser import \
+    ColmapDataParserConfig
 from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.exporter import texture_utils, tsdf_utils
-from nerfstudio.exporter.exporter_utils import (
-    collect_camera_poses,
-    generate_point_cloud,
-    get_mesh_from_filename,
-)
-from nerfstudio.exporter.marching_cubes import (
-    generate_mesh_with_multires_marching_cubes,
-)
-from nerfstudio.fields.sdf_field import SDFField
-from nerfstudio.models.gaussian_splatting import GaussianSplattingModel
+from nerfstudio.exporter.exporter_utils import (collect_camera_poses,
+                                                export_frame_render,
+                                                generate_point_cloud,
+                                                get_mesh_from_filename)
+from nerfstudio.exporter.marching_cubes import \
+    generate_mesh_with_multires_marching_cubes
+from nerfstudio.fields.sdf_field import SDFField  # noqa
+from nerfstudio.models.splatfacto import SplatfactoModel
+from nerfstudio.models.visiofacto import VisiofactoModel
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.process_data import colmap_utils
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
 
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
 @dataclass
 class Exporter:
@@ -138,6 +140,9 @@ class ExportPointCloud(Exporter):
     """Number of rays to evaluate per batch. Decrease if you run out of memory."""
     std_ratio: float = 10.0
     """Threshold based on STD of the average distances across the point cloud to remove outliers."""
+    save_world_frame: bool = False
+    """If set, saves the point cloud in the same frame as the original dataset. Otherwise, uses the
+    scaled and reoriented coordinate space expected by the NeRF models."""
 
     def main(self) -> None:
         """Export point cloud."""
@@ -174,6 +179,17 @@ class ExportPointCloud(Exporter):
             crop_obb=crop_obb,
             std_ratio=self.std_ratio,
         )
+        if self.save_world_frame:
+            # apply the inverse dataparser transform to the point cloud
+            points = np.asarray(pcd.points)
+            poses = np.eye(4, dtype=np.float32)[None, ...].repeat(points.shape[0], axis=0)[:, :3, :]
+            poses[:, :3, 3] = points
+            poses = pipeline.datamanager.train_dataparser_outputs.transform_poses_to_original_space(
+                torch.from_numpy(poses)
+            )
+            points = poses[:, :3, 3].numpy()
+            pcd.points = o3d.utility.Vector3dVector(points)
+
         torch.cuda.empty_cache()
 
         CONSOLE.print(f"[bold green]:white_check_mark: Generated {pcd}")
@@ -420,9 +436,7 @@ class ExportMarchingCubesMesh(Exporter):
 
         CONSOLE.print("Extracting mesh with marching cubes... which may take a while")
 
-        assert (
-            self.resolution % 512 == 0
-        ), f"""resolution must be divisible by 512, got {self.resolution}.
+        assert self.resolution % 512 == 0, f"""resolution must be divisible by 512, got {self.resolution}.
         This is important because the algorithm uses a multi-resolution approach
         to evaluate the SDF where the minimum resolution is 512."""
 
@@ -480,9 +494,8 @@ class ExportCameraPoses(Exporter):
 
             CONSOLE.print(f"[bold green]:white_check_mark: Saved poses to {output_file_path}")
 
-
 @dataclass
-class ExportGaussianSplat(Exporter):
+class ExportImages(Exporter):
     """
     Export 3D Gaussian Splatting model to a .ply
     """
@@ -490,9 +503,59 @@ class ExportGaussianSplat(Exporter):
     output_dir: Optional[Path] = None
     load_step: Optional[int] = None
     transform_to_colmap_coordinates: bool = False
+    as_training: bool = False
 
     thumbnail_size: int = 512
     thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
+
+    def main(self) -> None:
+        if self.output_dir is None:
+            self.output_dir = self.load_config.parent / 'images'
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        def update_config_callback(config: TrainerConfig):
+            assert isinstance(config.pipeline.datamanager, FullImageDatamanagerConfig)
+            assert isinstance(config.pipeline.datamanager.dataparser, ColmapDataParserConfig)
+            config.pipeline.datamanager.dataparser.load_3D_points = False
+            config.pipeline.datamanager.cache_images = 'no-cache'
+            config.load_step = self.load_step
+            return config
+
+        _, pipeline, _, step = eval_setup(self.load_config,
+                                          update_config_callback=update_config_callback)
+
+        assert isinstance(pipeline.datamanager, FullImageDatamanager)
+
+        model = pipeline.model
+
+        if self.as_training:
+            model.train(True)
+
+        model.step = step
+
+        # sns.histplot(torch.sigmoid(model.opacities).detach().cpu().numpy())
+        # plt.savefig(self.output_dir / 'opacity_hist.png')
+
+        with torch.no_grad():
+            for camera, filename in zip(pipeline.datamanager.train_dataset.cameras, pipeline.datamanager.train_dataset.image_filenames):
+                output = model.get_outputs(camera.reshape((1,)).to(model.device))['rgb'].cpu()
+                mediapy.write_image(self.output_dir / filename.name, output)
+                CONSOLE.print(f'Wrote {self.output_dir / filename.name}')
+
+
+@dataclass
+class ExportGaussianSplat(Exporter):
+    """
+    Export 3D Gaussian Splatting model to a .ply
+    """
+    output_dir: Optional[Path] = None
+    load_step: Optional[int] = None
+
+    thumbnail_size: int = 512
+    thumbnail_fov: float = 60.0  # horizontal field-of-view in degrees
+
+    transform_to_colmap_coordinates: bool = False
 
     def main(self) -> None:
         if self.output_dir is None:
@@ -511,62 +574,64 @@ class ExportGaussianSplat(Exporter):
         _, pipeline, _, step = eval_setup(self.load_config,
                                           update_config_callback=update_config_callback)
 
-        assert isinstance(pipeline.model, GaussianSplattingModel)
-        assert isinstance(pipeline.datamanager, FullImageDatamanager)
+        assert isinstance(pipeline.model, SplatfactoModel) or isinstance(pipeline.model, VisiofactoModel)
 
-        model: GaussianSplattingModel = pipeline.model
+        model: Union[SplatfactoModel, VisiofactoModel] = pipeline.model
 
-        filename = self.output_dir / "point_cloud.ply"
+        filename = self.output_dir / "splat.ply"
 
-        data = np.zeros(model.means.shape[0], dtype=np.dtype([
-            # Position
-            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            # Always zero
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-            # 0-th order spherical harmonics
-            ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
-            # Three orders of spherical harmonics, regardless of how many we actually have
-            *[(f'f_rest_{i}', 'f4') for i in range(45)],
-            # Sigmoid of the opacity
-            ('opacity', 'f4'),
-            # Log of the scale
-            ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
-            # Rotation quaternion
-            ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
-        ]))
+        map_to_tensors = {}
 
         with torch.no_grad():
             positions = model.means.cpu().numpy()
-            data['x'] = positions[:, 0]
-            data['y'] = positions[:, 1]
-            data['z'] = positions[:, 2]
+            n = positions.shape[0]
+            map_to_tensors["positions"] = positions
 
-            data['opacity'] = model.opacities.cpu().numpy().reshape(data.shape)
+            if model.config.sh_degree > 0:
+                shs_0 = model.shs_0.contiguous().cpu().numpy()
+                for i in range(shs_0.shape[1]):
+                    map_to_tensors[f"f_dc_{i}"] = shs_0[:, i, None]
 
-            colors = model.get_colors.cpu().numpy()
-            scales = model.scales.cpu().numpy()
-            quats = model.quats.cpu().numpy()
+                # transpose(1, 2) was needed to match the sh order in Inria version
+                shs_rest = model.shs_rest.transpose(1, 2).contiguous().cpu().numpy()
+                shs_rest = shs_rest.reshape((n, -1))
+                for i in range(shs_rest.shape[-1]):
+                    map_to_tensors[f"f_rest_{i}"] = shs_rest[:, i, None]
+            else:
+                colors = torch.clamp(model.colors.clone(), 0.0, 1.0).data.cpu().numpy()
+                map_to_tensors["colors"] = (colors * 255).astype(np.uint8)
 
-        data['f_dc_0'] = colors[:, 0, 0].reshape(data.shape)
-        data['f_dc_1'] = colors[:, 0, 1].reshape(data.shape)
-        data['f_dc_2'] = colors[:, 0, 2].reshape(data.shape)
-        sh_count = colors.shape[1] - 1
-        for c in range(3):
-            for i in range(sh_count):
-                data[f'f_rest_{c * 15 + i}'] = colors[:, i + 1, c].reshape(data.shape)
+            map_to_tensors["opacity"] = model.opacities.data.cpu().numpy()
 
-        data['scale_0'] = scales[:, 0].reshape(data.shape)
-        data['scale_1'] = scales[:, 1].reshape(data.shape)
-        data['scale_2'] = scales[:, 2].reshape(data.shape)
+            scales = model.scales.data.cpu().numpy()
+            for i in range(3):
+                map_to_tensors[f"scale_{i}"] = scales[:, i, None]
 
-        data['rot_0'] = quats[:, 0].reshape(data.shape)
-        data['rot_1'] = quats[:, 1].reshape(data.shape)
-        data['rot_2'] = quats[:, 2].reshape(data.shape)
-        data['rot_3'] = quats[:, 3].reshape(data.shape)
+            quats = model.quats.data.cpu().numpy()
+            for i in range(4):
+                map_to_tensors[f"rot_{i}"] = quats[:, i, None]
+            
+            map_to_tensors["normals"] = self.estimate_normals(np.exp(scales), quats)
 
-        with open(filename, mode='wb') as f:
-            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
+        # post optimization, it is possible have NaN/Inf values in some attributes
+        # to ensure the exported ply file has finite values, we enforce finite filters.
+        select = np.ones(n, dtype=bool)
+        for k, t in map_to_tensors.items():
+            n_before = np.sum(select)
+            select = np.logical_and(select, np.isfinite(t).all(axis=1))
+            n_after = np.sum(select)
+            if n_after < n_before:
+                CONSOLE.print(f"{n_before - n_after} NaN/Inf elements in {k}")
+
+        if np.sum(select) < n:
+            CONSOLE.print(f"values have NaN/Inf in map_to_tensors, only export {np.sum(select)}/{n}")
+            for k, t in map_to_tensors.items():
+                map_to_tensors[k] = map_to_tensors[k][select, :]
+
+        o3d.t.io.write_point_cloud(str(filename), o3d.t.geometry.PointCloud(map_to_tensors))
         CONSOLE.print(f'Wrote {filename}')
+
+        export_frame_render(pipeline, self.output_dir / "render.png")
 
         frames_json = self.get_frames_json(pipeline.datamanager)
         with open(self.output_dir / "frames.json", "w") as f:
@@ -592,58 +657,40 @@ class ExportGaussianSplat(Exporter):
                 # coordinate system as the output splats.
                 'inputTransform': input_transform.ravel('F').tolist(),
                 'steps': step + 1,
+                'numberOfSplats': positions.shape[0],
             }, f)
         CONSOLE.print(f'Wrote {self.output_dir / "splat_info.json"}')
 
-        with torch.no_grad():
-            fov = math.radians(self.thumbnail_fov)
-            w = h = self.thumbnail_size
-            cx = cy = w / 2.
-            fx = fy = cx / math.tan(fov / 2)
-            thumbnail_camera = Cameras(
-                camera_to_worlds=torch.from_numpy(initial_camera_transform[:3]).to(torch.float32),
-                fx=fx,
-                fy=fy,
-                cx=cx,
-                cy=cy,
-                width=w,
-                height=h,
-            )
-            output = model.get_outputs(thumbnail_camera.reshape((1,)).to(model.device))['rgb'].cpu()
-        mediapy.write_image(self.output_dir / 'render.png', output)
-        CONSOLE.print(f'Wrote {self.output_dir / "render.png"}')
-
         if self.transform_to_colmap_coordinates:
             self.write_transformed_ply(
-                data=data, positions=positions, scales=scales,
+                data=map_to_tensors, positions=positions, scales=scales,
                 rotation_transform=dataparser_transform,
                 position_transform=input_transform,
                 scale_transform=pipeline.datamanager.train_dataparser_outputs.dataparser_scale,
             )
 
     def write_transformed_ply(
-        self,
-        data: np.ndarray,
-        positions: np.ndarray,
-        scales: np.ndarray,
-        rotation_transform: np.ndarray,
-        position_transform: np.ndarray,
-        scale_transform: float,
+            self,
+            data,
+            positions: np.ndarray,
+            scales: np.ndarray,
+            rotation_transform: np.ndarray,
+            position_transform: np.ndarray,
+            scale_transform: float,
     ):
         filename = self.output_dir / 'transformed.ply'
         transformed_positions = np.linalg.inv(position_transform) @ np.concatenate([
             positions,
             np.ones((positions.shape[0], 1)),
         ], axis=1).T
-        data['x'] = transformed_positions[0]
-        data['y'] = transformed_positions[1]
-        data['z'] = transformed_positions[2]
+        data['positions'] = transformed_positions[0:3].T.astype('float32')
+
         transformed_scales = torch.sigmoid(torch.from_numpy(scales))
         transformed_scales = (transformed_scales / scale_transform).T
         transformed_scales = torch.logit(transformed_scales).numpy()
-        data['scale_0'] = transformed_scales[0]
-        data['scale_1'] = transformed_scales[1]
-        data['scale_2'] = transformed_scales[2]
+        data['scale_0'] = transformed_scales[0:1].T
+        data['scale_1'] = transformed_scales[1:2].T
+        data['scale_2'] = transformed_scales[2:3].T
         rotation_transform = Quaternion(matrix=np.linalg.inv(rotation_transform))
         for i in range(len(data['rot_0'])):
             quat = Quaternion(data['rot_0'][i], data['rot_1'][i], data['rot_2'][i], data['rot_3'][i])
@@ -652,8 +699,8 @@ class ExportGaussianSplat(Exporter):
             data['rot_1'][i] = quat[1]
             data['rot_2'][i] = quat[2]
             data['rot_3'][i] = quat[3]
-        with open(filename, mode='wb') as f:
-            PlyData([PlyElement.describe(data, 'vertex')]).write(f)
+
+        o3d.t.io.write_point_cloud(str(filename), o3d.t.geometry.PointCloud(data))
         CONSOLE.print(f'Wrote {filename}')
 
     def get_frames_json(self, datamanager: FullImageDatamanager):
@@ -675,8 +722,13 @@ class ExportGaussianSplat(Exporter):
         if distorted_colmap_path.exists():
             camera_id_to_camera = colmap_utils.read_cameras_binary(distorted_colmap_path / 'cameras.bin')
             image_id_to_image = colmap_utils.read_images_binary(distorted_colmap_path / 'images.bin')
+
             for image_id, image in image_id_to_image.items():
-                frame = next(f for f in frames if f['name'] == image.name)
+                try:
+                    frame = next(f for f in frames if f['name'] == image.name)
+                except StopIteration:
+                    print("Skipping", image.name)
+                    continue
                 camera = camera_id_to_camera[image.camera_id]
                 frame['params'] = colmap_utils.parse_colmap_camera_params(camera)
                 frame['params']['fx'] = frame['params'].pop('fl_x')
@@ -727,6 +779,20 @@ class ExportGaussianSplat(Exporter):
         avg_direction /= np.linalg.norm(avg_direction)
         return focus + avg_direction * avg_distance
 
+    def estimate_normals(
+        self,
+        scales: np.ndarray,
+        quats: np.ndarray,
+    ) -> np.ndarray:
+        assert len(scales) == len(quats), "The length of 'scales' and 'quats' must be the same."
+    
+        scale_sorted_indices = np.argsort(scales)
+        smallest_scale_index = scale_sorted_indices[:, 0]
+    
+        normals = np.array([Quaternion(quat).rotation_matrix[:, index].astype(np.float32) for quat, index in zip(quats, smallest_scale_index)])
+    
+        return normals
+
 
 Commands = tyro.conf.FlagConversionOff[
     Union[
@@ -736,6 +802,7 @@ Commands = tyro.conf.FlagConversionOff[
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
         Annotated[ExportCameraPoses, tyro.conf.subcommand(name="cameras")],
         Annotated[ExportGaussianSplat, tyro.conf.subcommand(name="gaussian-splat")],
+        Annotated[ExportImages, tyro.conf.subcommand(name="images")],
     ]
 ]
 

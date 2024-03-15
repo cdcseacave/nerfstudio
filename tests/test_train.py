@@ -26,6 +26,7 @@ BLACKLIST = [
     "neus",
     "generfacto",
     "neus-facto",
+    "splatfacto",
     "gaussian-splatting",
 ]
 
@@ -58,7 +59,7 @@ def set_reduced_config(config: TrainerConfig, tmp_path: Path):
     config.viewer.quit_on_train_completion = True
 
     # timestamp & output directory
-    config.set_timestamp()
+    config.set_timestamp(config.add_commit_sha)
     config.output_dir = tmp_path / "outputs"
 
     return config

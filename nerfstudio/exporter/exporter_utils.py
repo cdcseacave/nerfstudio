@@ -21,21 +21,29 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import copy
+import mediapy
 import numpy as np
-import open3d as o3d
 import pymeshlab
 import torch
 from jaxtyping import Float
+from pathlib import Path
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 from torch import Tensor
 
 from nerfstudio.cameras.cameras import Cameras
+from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
+
+if TYPE_CHECKING:
+    # Importing open3d can take ~1 second, so only do it below if we actually
+    # need it.
+    import open3d as o3d
 
 
 @dataclass
@@ -130,6 +138,7 @@ def generate_point_cloud(
 
             with torch.no_grad():
                 ray_bundle, _ = pipeline.datamanager.next_train(0)
+                assert isinstance(ray_bundle, RayBundle)
                 outputs = pipeline.model(ray_bundle)
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
@@ -190,6 +199,8 @@ def generate_point_cloud(
     points = torch.cat(points, dim=0)
     rgbs = torch.cat(rgbs, dim=0)
     view_directions = torch.cat(view_directions, dim=0).cpu()
+
+    import open3d as o3d
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points.double().cpu().numpy())
@@ -343,3 +354,20 @@ def collect_camera_poses(pipeline: VanillaPipeline) -> Tuple[List[Dict[str, Any]
     eval_frames = collect_camera_poses_for_dataset(eval_dataset)
 
     return train_frames, eval_frames
+
+def export_frame_render(pipeline: Pipeline, output_path: Path, image_idx: int = -1) -> None:
+    """Export a frame render to a file."""
+    if image_idx < 0:
+        image_idx = pipeline.datamanager.train_dataset.image_filenames.index(
+            min(pipeline.datamanager.train_dataset.image_filenames))
+
+    with torch.no_grad():
+        data = copy.deepcopy(pipeline.datamanager.cached_train[image_idx])
+        data["image"] = data["image"].to(pipeline.model.device)
+        cameras = pipeline.datamanager.train_dataset.cameras[image_idx:image_idx+1]
+        outputs = pipeline.model.get_outputs(cameras.to(pipeline.model.device))
+        rgb = outputs['rgb'].cpu()
+        metrics = pipeline.model.get_metrics_dict(outputs, data)
+        psnr = metrics['psnr'].cpu()
+    mediapy.write_image(output_path, rgb)
+    CONSOLE.print(f'Wrote image {image_idx} with {psnr:.2f} PSNR at {output_path}')

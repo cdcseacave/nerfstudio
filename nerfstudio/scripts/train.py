@@ -95,6 +95,8 @@ def train_loop(local_rank: int, world_size: int, config: TrainerConfig, global_r
         config: config file specifying training regimen
     """
     _set_random_seed(config.machine.seed + global_rank)
+    # _set_random_seed(42)
+    # torch.use_deterministic_algorithms(True)
     trainer = config.setup(local_rank=local_rank, world_size=world_size)
     trainer.setup()
     trainer.train()
@@ -238,7 +240,7 @@ def main(config: TrainerConfig) -> None:
         CONSOLE.log(f"Loading pre-set config from: {config.load_config}")
         config = yaml.load(config.load_config.read_text(), Loader=yaml.Loader)
 
-    config.set_timestamp()
+    config.set_timestamp(config.add_commit_sha)
 
     # print and save config
     config.print_to_terminal()

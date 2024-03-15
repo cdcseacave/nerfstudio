@@ -16,7 +16,10 @@
 
 import itertools
 import math
+import numpy as np
 from dataclasses import dataclass
+from scipy import stats
+from pyquaternion import Quaternion
 from typing import Literal, Tuple
 
 import torch
@@ -518,3 +521,75 @@ def generate_polyhedron_basis(
 
     basis = verts.flip(-1)
     return basis
+
+
+def compute_statistics(
+    values: np.ndarray,
+    header: str = "Statistics:",
+) -> None:
+    # Calculating statistics using numpay and scipy.stats
+    min_val = np.min(values)
+    max_val = np.max(values)
+    mean_val = np.mean(values)
+    median_val = np.median(values)
+    std_dev_val = np.std(values)
+    variance_val = std_dev_val ** 2
+    skewness_val = stats.skew(values)
+    kurtosis_val = stats.kurtosis(values)
+
+    # Displaying all statistics
+    print(header)
+    print(f"\tMin: {min_val}, Mean: {mean_val}, Median: {median_val}, Max: {max_val}")
+    print(f"\tStd-dev: {std_dev_val}, Variance: {variance_val}, Skewness: {skewness_val}, Kurtosis: {kurtosis_val}")
+
+def quaternion_to_rotation(quat):
+    """
+    Convert a quaternion into a rotation matrix using pyquaternion format,
+    which uses scalar-first format (w x y z).
+    Args:
+        quat (numpy.ndarray): The quaternion to convert.
+    Returns:
+        numpy.ndarray: The rotation matrix.
+    """
+    # Normalize the quaternion
+    s = 1.0 / np.linalg.norm(quat)
+    w, x, y, z = quat[0] * s, quat[1] * s, quat[2] * s, quat[3] * s
+
+    # Construct the rotation matrix
+    return np.array([
+        [1.0 - 2.0 * (y**2 + z**2), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
+        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x**2 + z**2), 2.0 * (y * z - w * x)],
+        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x**2 + y**2)]
+    ])
+
+def quaternion_from_vectors(normal, up_direction=np.array([1.0, 0.0, 0.0])):
+    """
+    Generate a quaternion from a normal vector, assuming a certain 'up' direction.
+    For ex if the 'up' direction is [1.0, 0.0, 0.0], then the normal will be the first column of the rotation matrix.
+    Args:
+        normal (numpy.ndarray): The normalized normal vector.
+        up_direction (numpy.ndarray): The normalized 'up' direction, default is [1.0, 0.0, 0.0].
+    Returns:
+        Quaternion: The quaternion representing the rotation.
+    """
+    # Compute the axis of rotation (cross product)
+    try:
+        axis = np.cross(up_direction, normal)
+
+        # Compute the cosine of the angle (dot product)
+        cos_angle = np.dot(up_direction, normal)
+
+        # Compute the angle
+        angle = np.arccos(cos_angle)
+
+        # Create the quaternion
+        if np.linalg.norm(axis) != 0:
+            # Normal case
+            quat = Quaternion(axis=axis, angle=angle)
+        else:
+            # The normal and up_direction are parallel
+            quat = Quaternion(axis=[0, 0, 1], angle=0 if cos_angle > 0 else np.pi)
+    except RuntimeError as e:
+        print("RuntimeError: quaternion_from_vectors")
+        raise e
+    return quat

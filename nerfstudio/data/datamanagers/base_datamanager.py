@@ -41,6 +41,7 @@ from typing import (
 )
 
 import torch
+import tyro
 from torch import nn
 from torch.nn import Parameter
 from torch.utils.data.distributed import DistributedSampler
@@ -54,16 +55,8 @@ from nerfstudio.configs.dataparser_configs import AnnotatedDataParserUnion
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.datasets.base_dataset import InputDataset
-from nerfstudio.data.pixel_samplers import (
-    PatchPixelSamplerConfig,
-    PixelSampler,
-    PixelSamplerConfig,
-)
-from nerfstudio.data.utils.dataloaders import (
-    CacheDataloader,
-    FixedIndicesEvalDataloader,
-    RandIndicesEvalDataloader,
-)
+from nerfstudio.data.pixel_samplers import PatchPixelSamplerConfig, PixelSampler, PixelSamplerConfig
+from nerfstudio.data.utils.dataloaders import CacheDataloader, FixedIndicesEvalDataloader, RandIndicesEvalDataloader
 from nerfstudio.data.utils.nerfstudio_collate import nerfstudio_collate
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes
 from nerfstudio.model_components.ray_generators import RayGenerator
@@ -130,7 +123,7 @@ class DataManager(nn.Module):
     To get data, use the next_train and next_eval functions.
     This data manager's next_train and next_eval methods will return 2 things:
 
-    1. A rays: This will contain the rays/camera we are sampling, with latents and
+    1. 'rays': This will contain the rays or camera we are sampling, with latents and
         conditionals attached (everything needed at inference)
     2. A "batch" of auxiliary information: This will contain the mask, the ground truth
         pixels, etc needed to actually train, score, etc the model
@@ -269,7 +262,7 @@ class DataManager(nn.Module):
         raise NotImplementedError
 
     @abstractmethod
-    def next_eval_image(self, step: int) -> Tuple[int, Union[RayBundle, Cameras], Dict]:
+    def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:
         """Retrieve the next eval image.
 
         Args:
@@ -316,7 +309,7 @@ class VanillaDataManagerConfig(DataManagerConfig):
 
     _target: Type = field(default_factory=lambda: VanillaDataManager)
     """Target class to instantiate."""
-    dataparser: AnnotatedDataParserUnion = BlenderDataParserConfig()
+    dataparser: AnnotatedDataParserUnion = field(default_factory=BlenderDataParserConfig)
     """Specifies the dataparser used to unpack the data."""
     train_num_rays_per_batch: int = 1024
     """Number of rays per batch to use per training iteration."""
@@ -341,10 +334,12 @@ class VanillaDataManagerConfig(DataManagerConfig):
     along with relevant information about camera intrinsics
     """
     patch_size: int = 1
-    """Size of patch to sample from. If >1, patch-based sampling will be used."""
-    camera_optimizer: Optional[CameraOptimizerConfig] = field(default=None)
+    """Size of patch to sample from. If > 1, patch-based sampling will be used."""
+
+    # tyro.conf.Suppress prevents us from creating CLI arguments for this field.
+    camera_optimizer: tyro.conf.Suppress[Optional[CameraOptimizerConfig]] = field(default=None)
     """Deprecated, has been moved to the model config."""
-    pixel_sampler: PixelSamplerConfig = PixelSamplerConfig()
+    pixel_sampler: PixelSamplerConfig = field(default_factory=PixelSamplerConfig)
     """Specifies the pixel sampler used to sample pixels from images."""
 
     def __post_init__(self):
@@ -411,9 +406,9 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()
         self.exclude_batch_keys_from_device = self.train_dataset.exclude_batch_keys_from_device
-        if self.config.masks_on_gpu is True:
+        if self.config.masks_on_gpu is True and "mask" in self.exclude_batch_keys_from_device:
             self.exclude_batch_keys_from_device.remove("mask")
-        if self.config.images_on_gpu is True:
+        if self.config.images_on_gpu is True and "image" in self.exclude_batch_keys_from_device:
             self.exclude_batch_keys_from_device.remove("image")
 
         if self.train_dataparser_outputs is not None:
@@ -474,8 +469,15 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
         is_equirectangular = (dataset.cameras.camera_type == CameraType.EQUIRECTANGULAR.value).all()
         if is_equirectangular.any():
             CONSOLE.print("[bold yellow]Warning: Some cameras are equirectangular, but using default pixel sampler.")
+
+        fisheye_crop_radius = None
+        if dataset.cameras.metadata is not None:
+            fisheye_crop_radius = dataset.cameras.metadata.get("fisheye_crop_radius")
+
         return self.config.pixel_sampler.setup(
-            is_equirectangular=is_equirectangular, num_rays_per_batch=num_rays_per_batch
+            is_equirectangular=is_equirectangular,
+            num_rays_per_batch=num_rays_per_batch,
+            fisheye_crop_radius=fisheye_crop_radius,
         )
 
     def setup_train(self):
@@ -547,11 +549,10 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
         ray_bundle = self.eval_ray_generator(ray_indices)
         return ray_bundle, batch
 
-    def next_eval_image(self, step: int) -> Tuple[int, RayBundle, Dict]:
-        for camera_ray_bundle, batch in self.eval_dataloader:
-            assert camera_ray_bundle.camera_indices is not None
-            image_idx = int(camera_ray_bundle.camera_indices[0, 0, 0])
-            return image_idx, camera_ray_bundle, batch
+    def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:
+        for camera, batch in self.eval_dataloader:
+            assert camera.shape[0] == 1
+            return camera, batch
         raise ValueError("No more eval images")
 
     def get_train_rays_per_batch(self) -> int:
